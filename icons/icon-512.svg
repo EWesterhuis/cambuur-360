@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="80" fill="#003DA5"/>
+  <text x="256" y="230" text-anchor="middle" font-family="Arial, sans-serif" font-size="90" font-weight="bold" fill="#FFFFFF">CAMBUUR</text>
+  <text x="256" y="370" text-anchor="middle" font-family="Arial, sans-serif" font-size="155" font-weight="bold" fill="#FFD700" textLength="340" lengthAdjust="spacingAndGlyphs">360</text>
+</svg>

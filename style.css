@@ -1,0 +1,439 @@
+/* === SC Cambuur Kleuren === */
+:root {
+    --cambuur-blauw: #003DA5;
+    --cambuur-geel: #FFD700;
+    --cambuur-donker: #002366;
+    --wit: #ffffff;
+    --grijs-licht: #f4f4f4;
+    --grijs: #666;
+    --tekst: #222;
+    --radius: 12px;
+    --schaduw: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* === Reset & Basis === */
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--grijs-licht);
+    color: var(--tekst);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* === Header === */
+header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    color: var(--wit);
+    padding: 1.1rem 1.2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    background:
+        radial-gradient(circle at 85% -20%, rgba(255, 215, 0, 0.35), transparent 55%),
+        linear-gradient(135deg, #0050d8 0%, var(--cambuur-blauw) 45%, var(--cambuur-donker) 100%);
+    box-shadow: 0 4px 20px rgba(0, 30, 90, 0.35);
+    overflow: hidden;
+    isolation: isolate;
+}
+
+/* Diagonale streep-overlay (Cambuur signatuur) */
+.header-bg {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background-image: repeating-linear-gradient(
+        135deg,
+        transparent 0,
+        transparent 28px,
+        rgba(255, 215, 0, 0.06) 28px,
+        rgba(255, 215, 0, 0.06) 30px
+    );
+    pointer-events: none;
+}
+
+/* Onderkant accent-lijn in geel */
+header::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, var(--cambuur-geel), transparent);
+}
+
+.header-content {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    min-width: 0;
+}
+
+.header-text {
+    min-width: 0;
+}
+
+header h1 {
+    font-size: 1.45rem;
+    font-weight: 900;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+header h1 .accent {
+    color: var(--cambuur-geel);
+    font-style: italic;
+}
+
+.subtitle {
+    font-size: 0.78rem;
+    opacity: 0.85;
+    margin-top: 3px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    font-weight: 500;
+}
+
+.refresh-btn {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1.5px solid rgba(255, 255, 255, 0.25);
+    color: var(--wit);
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: transform 0.2s ease, background 0.2s ease, color 0.2s ease;
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    backdrop-filter: blur(6px);
+}
+
+.refresh-btn:hover {
+    background: var(--cambuur-geel);
+    color: var(--cambuur-donker);
+    transform: rotate(-15deg);
+}
+
+.refresh-btn.spinning svg {
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (max-width: 380px) {
+    header h1 { font-size: 1.25rem; }
+    .subtitle { font-size: 0.7rem; }
+}
+
+/* === Tabs === */
+.tabs {
+    display: flex;
+    background: var(--wit);
+    box-shadow: var(--schaduw);
+    position: sticky;
+    top: 72px;
+    z-index: 99;
+}
+
+.tab {
+    flex: 1;
+    padding: 0.9rem 1rem;
+    border: none;
+    background: var(--wit);
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    color: var(--grijs);
+    transition: all 0.2s;
+    border-bottom: 3px solid transparent;
+}
+
+.tab.active {
+    color: var(--cambuur-blauw);
+    border-bottom-color: var(--cambuur-geel);
+    background: rgba(0, 61, 165, 0.04);
+}
+
+.tab:hover:not(.active) {
+    background: var(--grijs-licht);
+}
+
+/* === Tab Content === */
+.tab-content {
+    display: none;
+    padding: 1rem;
+    flex: 1;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* === Card List === */
+.card-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-width: 700px;
+    margin: 0 auto;
+}
+
+/* === Nieuws Card === */
+.news-card {
+    background: var(--wit);
+    border-radius: var(--radius);
+    padding: 1rem 1.1rem;
+    box-shadow: var(--schaduw);
+    transition: transform 0.2s, box-shadow 0.2s;
+    text-decoration: none;
+    color: inherit;
+    display: block;
+    border-left: 4px solid var(--cambuur-geel);
+}
+
+.news-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.news-card h3 {
+    font-size: 1rem;
+    line-height: 1.4;
+    margin-bottom: 0.5rem;
+    color: var(--tekst);
+}
+
+.news-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.8rem;
+    color: var(--grijs);
+}
+
+.news-source {
+    background: var(--cambuur-blauw);
+    color: var(--wit);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+/* === Video Card === */
+.video-card {
+    background: var(--wit);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--schaduw);
+    transition: transform 0.2s, box-shadow 0.2s;
+    text-decoration: none;
+    color: inherit;
+    display: block;
+}
+
+.video-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.video-thumbnail {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    display: block;
+}
+
+.video-info {
+    padding: 0.8rem 1rem;
+}
+
+.video-info h3 {
+    font-size: 0.95rem;
+    line-height: 1.3;
+    margin-bottom: 0.4rem;
+    color: var(--tekst);
+}
+
+.video-channel {
+    font-size: 0.8rem;
+    color: var(--grijs);
+}
+
+/* === API Key Notice === */
+.api-key-notice {
+    background: var(--wit);
+    border-radius: var(--radius);
+    padding: 1.2rem;
+    box-shadow: var(--schaduw);
+    max-width: 700px;
+    margin: 0 auto 1rem;
+    border-left: 4px solid var(--cambuur-geel);
+}
+
+.api-key-notice p {
+    margin-bottom: 0.8rem;
+    font-size: 0.95rem;
+}
+
+.api-key-notice input {
+    width: 100%;
+    padding: 0.7rem;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    margin-bottom: 0.6rem;
+}
+
+.api-key-notice input:focus {
+    outline: none;
+    border-color: var(--cambuur-blauw);
+}
+
+.api-key-notice button {
+    background: var(--cambuur-blauw);
+    color: var(--wit);
+    border: none;
+    padding: 0.6rem 1.5rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.api-key-notice button:hover {
+    background: var(--cambuur-donker);
+}
+
+.api-key-notice details {
+    margin-top: 1rem;
+    font-size: 0.85rem;
+    color: var(--grijs);
+}
+
+.api-key-notice summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--cambuur-blauw);
+}
+
+.api-key-notice ol {
+    margin-top: 0.5rem;
+    padding-left: 1.2rem;
+}
+
+.api-key-notice li {
+    margin-bottom: 0.3rem;
+}
+
+.api-key-notice a {
+    color: var(--cambuur-blauw);
+}
+
+.api-key-notice.hidden {
+    display: none;
+}
+
+/* === Loader === */
+.loader {
+    text-align: center;
+    padding: 2rem;
+    color: var(--grijs);
+    font-size: 1rem;
+}
+
+/* === Error === */
+.error-message {
+    text-align: center;
+    padding: 2rem;
+    color: #c0392b;
+    font-size: 0.95rem;
+}
+
+/* === Podcast Card === */
+.podcast-card {
+    background: var(--wit);
+    border-radius: var(--radius);
+    padding: 1rem 1.1rem;
+    box-shadow: var(--schaduw);
+    border-left: 4px solid var(--cambuur-blauw);
+}
+
+.podcast-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--grijs);
+}
+
+.podcast-badge {
+    background: var(--cambuur-blauw);
+    color: var(--wit);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.podcast-card h3 {
+    font-size: 0.95rem;
+    line-height: 1.4;
+    margin-bottom: 0.6rem;
+    color: var(--tekst);
+}
+
+.podcast-player {
+    margin-bottom: 0.5rem;
+}
+
+.podcast-player audio {
+    width: 100%;
+    height: 40px;
+    border-radius: 8px;
+}
+
+.podcast-publisher {
+    font-size: 0.75rem;
+    color: var(--grijs);
+}
+
+/* === Footer === */
+footer {
+    text-align: center;
+    padding: 1.5rem;
+    font-size: 0.75rem;
+    color: var(--grijs);
+    margin-top: auto;
+}
+
+/* === Responsive === */
+@media (min-width: 768px) {
+    header {
+        padding: 1.2rem 2rem;
+    }
+
+    header h1 {
+        font-size: 1.8rem;
+    }
+
+    .tab-content {
+        padding: 1.5rem 2rem;
+    }
+}

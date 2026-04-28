@@ -16,7 +16,7 @@ const HERTENKAMP_RSS = 'https://www.omnycontent.com/d/playlist/fdd7ab40-270d-4a1
 const CACHE_KEY_NEWS = 'cambuur_news_cache';
 const CACHE_KEY_VIDEOS = 'cambuur_videos_cache';
 const CACHE_KEY_PODCASTS = 'cambuur_podcasts_cache';
-const YOUTUBE_API_KEY = 'AIzaSyBo9dDZE3xNxbDr2EGSsEcKNjScHKlHhdE';
+const YOUTUBE_API_KEY = 'AIzaSyDsYe8VstT2pGXedH1O1Q_3pjWfIqVSBPc';
 const CACHE_DURATION = 30 * 60 * 1000; // 30 minuten
 
 // === Toegestane nieuwsbronnen ===

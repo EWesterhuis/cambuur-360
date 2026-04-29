@@ -6,8 +6,8 @@ const CORS_PROXIES = [
     (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
     (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-    (url) => `https://corsproxy.org/?url=${encodeURIComponent(url)}`,
 ];
+const PROXY_TIMEOUT_MS = 8000;
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
 const CAMBUUR_YT_RSS = 'https://www.youtube.com/feeds/videos.xml?channel_id=UCnZJsm8wS5_ZWPRHPINWeEw';
 const KKD_CHANNEL_ID = 'UCep9Om7XraP4ZEtpmPygSpg';
@@ -17,6 +17,7 @@ const CACHE_KEY_NEWS = 'cambuur_news_cache';
 const CACHE_KEY_VIDEOS = 'cambuur_videos_cache';
 const CACHE_KEY_PODCASTS = 'cambuur_podcasts_cache';
 const YOUTUBE_API_KEY = 'AIzaSyDsYe8VstT2pGXedH1O1Q_3pjWfIqVSBPc';
+let kkdSearchDisabled = false;
 const CACHE_DURATION = 30 * 60 * 1000; // 30 minuten
 
 // === Toegestane nieuwsbronnen ===
@@ -52,15 +53,39 @@ refreshBtn.addEventListener('click', () => {
         .finally(() => refreshBtn.classList.remove('spinning'));
 });
 
-// === Proxy helper: race alle proxies tegelijk voor snelheid ===
+// === Proxy helper: probeer proxies één voor één ===
 async function fetchViaProxy(url) {
-    const parser = new DOMParser();
-    return Promise.any(
-        CORS_PROXIES.map(proxyFn =>
-            fetch(proxyFn(url))
-                .then(r => { if (!r.ok) throw new Error('not ok'); return r.text(); })
-        )
-    );
+    const failures = [];
+
+    // Probeer proxies sequentieel: minder foutmeldingen dan alles tegelijk laten falen.
+    for (const proxyFn of CORS_PROXIES) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
+
+        try {
+            const response = await fetch(proxyFn(url), {
+                signal: controller.signal,
+                cache: 'no-store',
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const text = await response.text();
+            if (!text || !text.trim()) {
+                throw new Error('Lege response');
+            }
+
+            return text;
+        } catch (error) {
+            failures.push(error instanceof Error ? error.message : String(error));
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
+    throw new Error(`Alle proxies faalden voor ${url}: ${failures.join(' | ')}`);
 }
 
 // === Nieuws laden ===
@@ -198,7 +223,7 @@ async function loadVideos(forceRefresh = false) {
     try {
         const [cambuurVideos, kkdVideos] = await Promise.all([
             fetchCambuurRSS(),
-            fetchKKDSearch(),
+            kkdSearchDisabled ? Promise.resolve([]) : fetchKKDSearch(),
         ]);
 
         // Combineer en sorteer van nieuw naar oud
@@ -241,6 +266,8 @@ async function fetchCambuurRSS() {
 // KKD via Search API met q=Cambuur (100 units per call)
 async function fetchKKDSearch() {
     try {
+        if (!YOUTUBE_API_KEY) return [];
+
         const params = new URLSearchParams({
             part: 'snippet',
             channelId: KKD_CHANNEL_ID,
@@ -251,6 +278,13 @@ async function fetchKKDSearch() {
             key: YOUTUBE_API_KEY,
         });
         const response = await fetch(`${YOUTUBE_SEARCH_URL}?${params}`);
+
+        // Bij ongeldige/slecht geconfigureerde key niet blijven proberen binnen deze sessie.
+        if (response.status === 400 || response.status === 401 || response.status === 403) {
+            kkdSearchDisabled = true;
+            return [];
+        }
+
         if (!response.ok) return [];
         const data = await response.json();
         return (data.items || []).map(item => ({

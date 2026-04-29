@@ -95,8 +95,9 @@ async function fetchViaProxy(url) {
 // === RSS via rss2json: server-side ophalen + parsen, met proper CORS-header ===
 // Vermijdt de meeste publieke proxy-problemen. Gratis tier: ~10k requests/dag.
 async function fetchRSSItems(feedUrl) {
-    // count=50 → meer historie, zodat we tot ~30 dagen terug kunnen tonen.
-    const apiUrl = `${RSS2JSON_API}?rss_url=${encodeURIComponent(feedUrl)}&count=50`;
+    // Geen count-parameter: gratis tier weigert >10 (HTTP 422). Default volstaat
+    // doorgaans (~20 items). Voor meer is een gratis API-key nodig.
+    const apiUrl = `${RSS2JSON_API}?rss_url=${encodeURIComponent(feedUrl)}`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
     try {

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cambuur-app-v1';
+const CACHE_NAME = 'cambuur-app-v3';
 const STATIC_ASSETS = [
     './',
     './index.html',
@@ -29,21 +29,12 @@ self.addEventListener('activate', (event) => {
     self.clients.claim();
 });
 
-// Fetch: network-first voor API calls, cache-first voor statische bestanden
+// Fetch: cache-first voor statische bestanden van eigen origin
 self.addEventListener('fetch', (event) => {
     const url = new URL(event.request.url);
 
-    // API calls / externe requests: network-first
+    // Externe requests niet onderscheppen; laat de browser dit direct afhandelen.
     if (url.origin !== self.location.origin) {
-        event.respondWith(
-            fetch(event.request)
-                .then((response) => {
-                    const clone = response.clone();
-                    caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-                    return response;
-                })
-                .catch(() => caches.match(event.request))
-        );
         return;
     }
 
@@ -51,11 +42,17 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
         caches.match(event.request).then((cached) => {
             if (cached) return cached;
-            return fetch(event.request).then((response) => {
-                const clone = response.clone();
-                caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-                return response;
-            });
+            return fetch(event.request)
+                .then((response) => {
+                    const clone = response.clone();
+                    caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+                    return response;
+                })
+                .catch(() => new Response('Offline', {
+                    status: 503,
+                    statusText: 'Service Unavailable',
+                    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                }));
         })
     );
 });

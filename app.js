@@ -95,7 +95,8 @@ async function fetchViaProxy(url) {
 // === RSS via rss2json: server-side ophalen + parsen, met proper CORS-header ===
 // Vermijdt de meeste publieke proxy-problemen. Gratis tier: ~10k requests/dag.
 async function fetchRSSItems(feedUrl) {
-    const apiUrl = `${RSS2JSON_API}?rss_url=${encodeURIComponent(feedUrl)}`;
+    // count=50 → meer historie, zodat we tot ~30 dagen terug kunnen tonen.
+    const apiUrl = `${RSS2JSON_API}?rss_url=${encodeURIComponent(feedUrl)}&count=50`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
     try {
@@ -108,6 +109,28 @@ async function fetchRSSItems(feedUrl) {
         return data.items;
     } finally {
         clearTimeout(timeout);
+    }
+}
+
+// Filter items op publicatiedatum: laat alleen items van de afgelopen N dagen zien.
+const NEWS_MAX_AGE_DAYS = 30;
+function isRecent(pubDate, maxDays = NEWS_MAX_AGE_DAYS) {
+    if (!pubDate) return true; // geen datum: niet uitsluiten
+    const ts = new Date(pubDate).getTime();
+    if (isNaN(ts)) return true;
+    const cutoff = Date.now() - maxDays * 24 * 60 * 60 * 1000;
+    return ts >= cutoff;
+}
+
+// Hosts waarvan we weten dat ze CORS-headers sturen, zodat we daarvoor de
+// proxy kunnen overslaan en een direct fetch kunnen doen zonder console-noise.
+const DIRECT_FETCH_HOSTS = ['omnycontent.com', 'www.omnycontent.com'];
+function supportsDirectFetch(url) {
+    try {
+        const host = new URL(url).hostname;
+        return DIRECT_FETCH_HOSTS.includes(host);
+    } catch {
+        return false;
     }
 }
 
@@ -152,6 +175,7 @@ async function loadNieuws(forceRefresh = false) {
     // Combineer en deduplicate op basis van genormaliseerde titel
     const seen = new Set();
     const items = allItems
+        .filter(item => isRecent(item.pubDate))
         .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate))
         .filter(item => {
             const key = item.title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 60);
@@ -509,14 +533,18 @@ async function loadPodcasts(forceRefresh = false) {
 async function fetchPodcastFeed(feedUrl, podcastName, publisher) {
     try {
         let text;
-        // Sommige podcast-CDN's (zoals Omny) sturen CORS-headers; probeer direct eerst.
-        try {
-            const direct = await fetch(feedUrl, { cache: 'no-store' });
-            if (direct.ok) {
-                text = await direct.text();
+        // Sommige podcast-CDN's (zoals Omny) sturen CORS-headers; probeer die direct.
+        // Voor andere hosts (bv. argyf2.omropfryslan.nl) levert direct fetchen
+        // alleen een CORS-error in de console op, dus die slaan we direct over.
+        if (supportsDirectFetch(feedUrl)) {
+            try {
+                const direct = await fetch(feedUrl, { cache: 'no-store' });
+                if (direct.ok) {
+                    text = await direct.text();
+                }
+            } catch {
+                // Negeer; val terug op proxy.
             }
-        } catch {
-            // Negeer; val terug op proxy.
         }
         if (!text) {
             text = await fetchViaProxy(feedUrl);

@@ -3,12 +3,11 @@
 const GOOGLE_NEWS_RSS = 'https://news.google.com/rss/search?q=%22SC+Cambuur%22+OR+%22Cambuur%22&hl=nl&gl=NL&ceid=NL:nl';
 const OMROP_SPORT_RSS = 'https://www.omropfryslan.nl/rss/sport.xml';
 const CORS_PROXIES = [
-    (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
     (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-    (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
+    (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
 ];
-const PROXY_TIMEOUT_MS = 6000;
+const PROXY_TIMEOUT_MS = 8000;
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
 const CAMBUUR_YT_RSS = 'https://www.youtube.com/feeds/videos.xml?channel_id=UCnZJsm8wS5_ZWPRHPINWeEw';
 const KKD_CHANNEL_ID = 'UCep9Om7XraP4ZEtpmPygSpg';

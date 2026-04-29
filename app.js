@@ -3,11 +3,12 @@
 const GOOGLE_NEWS_RSS = 'https://news.google.com/rss/search?q=%22SC+Cambuur%22+OR+%22Cambuur%22&hl=nl&gl=NL&ceid=NL:nl';
 const OMROP_SPORT_RSS = 'https://www.omropfryslan.nl/rss/sport.xml';
 const CORS_PROXIES = [
+    (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
     (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
     (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+    (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
 ];
-const PROXY_TIMEOUT_MS = 8000;
+const PROXY_TIMEOUT_MS = 6000;
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
 const CAMBUUR_YT_RSS = 'https://www.youtube.com/feeds/videos.xml?channel_id=UCnZJsm8wS5_ZWPRHPINWeEw';
 const KKD_CHANNEL_ID = 'UCep9Om7XraP4ZEtpmPygSpg';
@@ -421,7 +422,19 @@ async function loadPodcasts(forceRefresh = false) {
 
 async function fetchPodcastFeed(feedUrl, podcastName, publisher) {
     try {
-        const text = await fetchViaProxy(feedUrl);
+        let text;
+        // Sommige podcast-CDN's (zoals Omny) sturen CORS-headers; probeer direct eerst.
+        try {
+            const direct = await fetch(feedUrl, { cache: 'no-store' });
+            if (direct.ok) {
+                text = await direct.text();
+            }
+        } catch {
+            // Negeer; val terug op proxy.
+        }
+        if (!text) {
+            text = await fetchViaProxy(feedUrl);
+        }
         const parser = new DOMParser();
         const xml = parser.parseFromString(text, 'text/xml');
         const items = xml.querySelectorAll('item');

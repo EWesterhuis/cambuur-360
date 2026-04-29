@@ -2,6 +2,10 @@
 
 const GOOGLE_NEWS_RSS = 'https://news.google.com/rss/search?q=%22SC+Cambuur%22+OR+%22Cambuur%22&hl=nl&gl=NL&ceid=NL:nl';
 const OMROP_SPORT_RSS = 'https://www.omropfryslan.nl/rss/sport.xml';
+const OMROP_NIEUWS_RSS = 'https://www.omropfryslan.nl/rss/nieuws.xml';
+const CAMBUUR_NL_RSS = 'https://www.cambuur.nl/feed/';
+const LC_RSS = 'https://lc.nl/api/feed/rss';
+const RSS2JSON_API = 'https://api.rss2json.com/v1/api.json';
 const CORS_PROXIES = [
     (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
@@ -88,6 +92,25 @@ async function fetchViaProxy(url) {
     throw new Error(`Alle proxies faalden voor ${url}: ${failures.join(' | ')}`);
 }
 
+// === RSS via rss2json: server-side ophalen + parsen, met proper CORS-header ===
+// Vermijdt de meeste publieke proxy-problemen. Gratis tier: ~10k requests/dag.
+async function fetchRSSItems(feedUrl) {
+    const apiUrl = `${RSS2JSON_API}?rss_url=${encodeURIComponent(feedUrl)}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
+    try {
+        const response = await fetch(apiUrl, { signal: controller.signal, cache: 'no-store' });
+        if (!response.ok) throw new Error(`rss2json HTTP ${response.status}`);
+        const data = await response.json();
+        if (data.status !== 'ok' || !Array.isArray(data.items)) {
+            throw new Error(`rss2json status: ${data.status || 'onbekend'}`);
+        }
+        return data.items;
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
 // === Nieuws laden ===
 async function loadNieuws(forceRefresh = false) {
     // Check cache
@@ -101,13 +124,25 @@ async function loadNieuws(forceRefresh = false) {
 
     nieuwsList.innerHTML = '<div class="loader">Nieuws laden...</div>';
 
-    // Haal Google News en Omrop Fryslân parallel op
-    const [googleItems, omropItems] = await Promise.all([
+    // Haal alle bronnen parallel op. Per-bron faalt stil (lege array) zodat één
+    // kapotte feed niet alles blokkeert.
+    const [googleItems, omropSportItems, omropNieuwsItems, cambuurItems, lcItems] = await Promise.all([
         fetchGoogleNews(),
-        fetchOmropFryslan(),
+        fetchOmropFryslanSport(),
+        fetchOmropFryslanNieuws(),
+        fetchCambuurNL(),
+        fetchLeeuwarderCourant(),
     ]);
 
-    if (!googleItems.length && !omropItems.length) {
+    const allItems = [
+        ...googleItems,
+        ...omropSportItems,
+        ...omropNieuwsItems,
+        ...cambuurItems,
+        ...lcItems,
+    ];
+
+    if (!allItems.length) {
         nieuwsList.innerHTML = '<div class="error-message">Kon nieuws niet laden. Probeer het later opnieuw.</div>';
         const cached = getCache(CACHE_KEY_NEWS);
         if (cached) renderNieuws(cached);
@@ -116,7 +151,7 @@ async function loadNieuws(forceRefresh = false) {
 
     // Combineer en deduplicate op basis van genormaliseerde titel
     const seen = new Set();
-    const items = [...googleItems, ...omropItems]
+    const items = allItems
         .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate))
         .filter(item => {
             const key = item.title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 60);
@@ -129,20 +164,17 @@ async function loadNieuws(forceRefresh = false) {
     renderNieuws(items);
 }
 
-// Google News RSS ophalen en filteren op toegestane bronnen
+// Google News RSS via rss2json: aggregator van diverse Nederlandse bronnen,
+// gefilterd op toegestane bronnen.
 async function fetchGoogleNews() {
     try {
-        const text = await fetchViaProxy(GOOGLE_NEWS_RSS);
-        const parser = new DOMParser();
-        const xml = parser.parseFromString(text, 'text/xml');
-        if (!xml.querySelector('item')) return [];
-
-        return Array.from(xml.querySelectorAll('item'))
+        const items = await fetchRSSItems(GOOGLE_NEWS_RSS);
+        return items
             .map(item => ({
-                title: cleanTitle(item.querySelector('title')?.textContent || ''),
-                link: item.querySelector('link')?.textContent || '#',
-                pubDate: item.querySelector('pubDate')?.textContent || '',
-                source: item.querySelector('source')?.textContent || 'Onbekend',
+                title: cleanTitle(item.title || ''),
+                link: item.link || '#',
+                pubDate: item.pubDate || '',
+                source: extractGoogleNewsSource(item),
             }))
             .filter(item => {
                 const src = item.source.toLowerCase();
@@ -153,29 +185,84 @@ async function fetchGoogleNews() {
     }
 }
 
-// Omrop Fryslân sport RSS: filter op Cambuur-gerelateerde artikelen
-async function fetchOmropFryslan() {
-    try {
-        const text = await fetchViaProxy(OMROP_SPORT_RSS);
-        const parser = new DOMParser();
-        const xml = parser.parseFromString(text, 'text/xml');
-        if (!xml.querySelector('item')) return [];
+// Google News verwerkt de bron meestal als suffix in de title (" - Bron")
+// of in description; rss2json zet 'm soms in author. Probeer alle plekken.
+function extractGoogleNewsSource(item) {
+    if (item.author) return item.author;
+    const title = item.title || '';
+    const dashParts = title.split(' - ');
+    if (dashParts.length > 1) return dashParts[dashParts.length - 1];
+    return 'Onbekend';
+}
 
-        return Array.from(xml.querySelectorAll('item'))
-            .filter(item => {
-                const title = (item.querySelector('title')?.textContent || '').toLowerCase();
-                const desc = (item.querySelector('description')?.textContent || '').toLowerCase();
-                return title.includes('cambuur') || desc.includes('cambuur');
-            })
+// Omrop Fryslân sport RSS: filter op Cambuur-gerelateerde artikelen
+async function fetchOmropFryslanSport() {
+    return fetchOmropFryslanFiltered(OMROP_SPORT_RSS);
+}
+
+// Omrop Fryslân algemeen nieuws RSS: filter op Cambuur-gerelateerde artikelen
+async function fetchOmropFryslanNieuws() {
+    return fetchOmropFryslanFiltered(OMROP_NIEUWS_RSS);
+}
+
+async function fetchOmropFryslanFiltered(feedUrl) {
+    try {
+        const items = await fetchRSSItems(feedUrl);
+        return items
+            .filter(itemMentionsCambuur)
             .map(item => ({
-                title: item.querySelector('title')?.textContent?.trim() || '',
-                link: item.querySelector('link')?.textContent || '#',
-                pubDate: item.querySelector('pubDate')?.textContent || '',
+                title: (item.title || '').trim(),
+                link: item.link || '#',
+                pubDate: item.pubDate || '',
                 source: 'Omrop Fryslân',
             }));
     } catch {
         return [];
     }
+}
+
+// Officiële Cambuur.nl feed: alle items zijn relevant.
+async function fetchCambuurNL() {
+    try {
+        const items = await fetchRSSItems(CAMBUUR_NL_RSS);
+        return items.map(item => ({
+            title: (item.title || '').trim(),
+            link: item.link || '#',
+            pubDate: item.pubDate || '',
+            source: 'Cambuur.nl',
+        }));
+    } catch {
+        return [];
+    }
+}
+
+// Leeuwarder Courant: brede regionale feed, filter op Cambuur.
+async function fetchLeeuwarderCourant() {
+    try {
+        const items = await fetchRSSItems(LC_RSS);
+        return items
+            .filter(itemMentionsCambuur)
+            .map(item => ({
+                title: (item.title || '').trim(),
+                link: item.link || '#',
+                pubDate: item.pubDate || '',
+                source: 'Leeuwarder Courant',
+            }));
+    } catch {
+        return [];
+    }
+}
+
+// Zoek "cambuur" in titel, description én volledige content (content:encoded).
+// Zo pikken we ook artikelen op waarbij Cambuur alleen in de body wordt genoemd
+// (bv. paywall-previews waar de teaser geen Cambuur noemt).
+function itemMentionsCambuur(item) {
+    const haystack = [
+        item.title,
+        item.description,
+        item.content,
+    ].filter(Boolean).join(' ').toLowerCase();
+    return haystack.includes('cambuur');
 }
 
 function cleanTitle(title) {

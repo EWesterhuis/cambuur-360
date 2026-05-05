@@ -3,7 +3,7 @@
 const GOOGLE_NEWS_RSS = 'https://news.google.com/rss/search?q=%22SC+Cambuur%22+OR+%22Cambuur%22&hl=nl&gl=NL&ceid=NL:nl';
 const OMROP_SPORT_RSS = 'https://www.omropfryslan.nl/rss/sport.xml';
 const OMROP_NIEUWS_RSS = 'https://www.omropfryslan.nl/rss/nieuws.xml';
-const CAMBUUR_NL_RSS = 'https://www.cambuur.nl/feed/';
+const CAMBUUR_NL_SITEMAP_INDEX = 'https://www.cambuur.nl/sitemap.xml';
 const LC_RSS = 'https://lc.nl/api/feed/rss';
 // Eigen Cloudflare Worker als CORS-proxy. Stabiel, zonder rate-limits, en
 // vervangt alle eerdere publieke proxies + rss2json.
@@ -215,18 +215,61 @@ async function fetchOmropFryslanFiltered(feedUrl) {
     }
 }
 
-// Officiële Cambuur.nl feed: alle items zijn relevant.
+// Cambuur.nl publiceert helaas een lege RSS-feed. We gebruiken in plaats daarvan
+// hun XML-sitemap, die wél alle nieuwsartikelen met datum bevat. Titels leiden
+// we af uit de URL-slug.
 async function fetchCambuurNL() {
     try {
-        const text = await fetchViaProxy(CAMBUUR_NL_RSS);
-        return parseRSS(text).map(item => ({
-            title: item.title,
-            link: item.link,
-            pubDate: item.pubDate,
-            source: 'Cambuur.nl',
-        }));
+        // Stap 1: sitemap-index ophalen en de meest recente nieuws-sitemap vinden.
+        const indexXml = new DOMParser().parseFromString(
+            await fetchViaProxy(CAMBUUR_NL_SITEMAP_INDEX),
+            'text/xml',
+        );
+        const newsSitemaps = Array.from(indexXml.querySelectorAll('sitemap'))
+            .map(s => ({
+                loc: s.querySelector('loc')?.textContent || '',
+                lastmod: s.querySelector('lastmod')?.textContent || '',
+            }))
+            .filter(s => s.loc.includes('nieuws-sitemap'))
+            .sort((a, b) => new Date(b.lastmod) - new Date(a.lastmod));
+
+        if (!newsSitemaps.length) return [];
+
+        // Stap 2: meest recente nieuws-sitemap parsen.
+        const sitemapXml = new DOMParser().parseFromString(
+            await fetchViaProxy(newsSitemaps[0].loc),
+            'text/xml',
+        );
+
+        return Array.from(sitemapXml.querySelectorAll('url')).map(urlNode => {
+            const link = urlNode.querySelector('loc')?.textContent || '#';
+            const lastmod = urlNode.querySelector('lastmod')?.textContent || '';
+            return {
+                title: titleFromCambuurUrl(link),
+                link,
+                pubDate: lastmod,
+                source: 'Cambuur.nl',
+            };
+        });
     } catch {
         return [];
+    }
+}
+
+// Maak een leesbare titel van een Cambuur-URL slug.
+// Bijv: ".../nieuws/sc-cambuur-terug-in-de-eredivisie/" → "SC Cambuur terug in de eredivisie"
+function titleFromCambuurUrl(url) {
+    try {
+        const slug = new URL(url).pathname
+            .replace(/^\/nieuws\//, '')
+            .replace(/\/$/, '');
+        if (!slug) return '';
+        const text = slug.replace(/-/g, ' ').trim();
+        // Eerste letter hoofdletter; "sc cambuur" → "SC Cambuur"
+        const capitalized = text.charAt(0).toUpperCase() + text.slice(1);
+        return capitalized.replace(/\bsc cambuur\b/gi, 'SC Cambuur');
+    } catch {
+        return url;
     }
 }
 

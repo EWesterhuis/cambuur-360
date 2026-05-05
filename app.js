@@ -246,14 +246,19 @@ async function fetchOmropFryslanFiltered(feedUrl) {
     }
 }
 
-// Officiële Cambuur.nl feed: alle items zijn relevant.
+// Officiële Cambuur.nl feed: rss2json blokkeert deze feed (levert lege items),
+// daarom halen we hem op via de proxy en parsen we de XML zelf.
 async function fetchCambuurNL() {
     try {
-        const items = await fetchRSSItems(CAMBUUR_NL_RSS);
-        return items.map(item => ({
-            title: (item.title || '').trim(),
-            link: item.link || '#',
-            pubDate: item.pubDate || '',
+        const text = await fetchViaProxy(CAMBUUR_NL_RSS);
+        const parser = new DOMParser();
+        const xml = parser.parseFromString(text, 'text/xml');
+        const items = xml.querySelectorAll('item');
+        if (!items.length) return [];
+        return Array.from(items).map(item => ({
+            title: (item.querySelector('title')?.textContent || '').trim(),
+            link: item.querySelector('link')?.textContent || '#',
+            pubDate: item.querySelector('pubDate')?.textContent || '',
             source: 'Cambuur.nl',
         }));
     } catch {

@@ -5,13 +5,10 @@ const OMROP_SPORT_RSS = 'https://www.omropfryslan.nl/rss/sport.xml';
 const OMROP_NIEUWS_RSS = 'https://www.omropfryslan.nl/rss/nieuws.xml';
 const CAMBUUR_NL_RSS = 'https://www.cambuur.nl/feed/';
 const LC_RSS = 'https://lc.nl/api/feed/rss';
-const RSS2JSON_API = 'https://api.rss2json.com/v1/api.json';
-const CORS_PROXIES = [
-    (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-    (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-];
-const PROXY_TIMEOUT_MS = 8000;
+// Eigen Cloudflare Worker als CORS-proxy. Stabiel, zonder rate-limits, en
+// vervangt alle eerdere publieke proxies + rss2json.
+const FEED_PROXY = 'https://cambuur-feed-proxy.ewoudwesterhuis.workers.dev/?url=';
+const PROXY_TIMEOUT_MS = 10000;
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
 const CAMBUUR_YT_RSS = 'https://www.youtube.com/feeds/videos.xml?channel_id=UCnZJsm8wS5_ZWPRHPINWeEw';
 const KKD_CHANNEL_ID = 'UCep9Om7XraP4ZEtpmPygSpg';
@@ -57,66 +54,41 @@ refreshBtn.addEventListener('click', () => {
         .finally(() => refreshBtn.classList.remove('spinning'));
 });
 
-// === Proxy helper: probeer proxies één voor één ===
-// validate: optionele functie die checkt of de response inhoud bruikbaar is.
-// Zo kunnen we detecteren dat een proxy een 200-foutpagina stuurt i.p.v. echte data.
-async function fetchViaProxy(url, validate = null) {
-    const failures = [];
-
-    // Probeer proxies sequentieel: minder foutmeldingen dan alles tegelijk laten falen.
-    for (const proxyFn of CORS_PROXIES) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
-
-        try {
-            const response = await fetch(proxyFn(url), {
-                signal: controller.signal,
-                cache: 'no-store',
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-
-            const text = await response.text();
-            if (!text || !text.trim()) {
-                throw new Error('Lege response');
-            }
-
-            if (validate && !validate(text)) {
-                throw new Error('Ongeldige response-inhoud (proxy-foutpagina?)');
-            }
-
-            return text;
-        } catch (error) {
-            failures.push(error instanceof Error ? error.message : String(error));
-        } finally {
-            clearTimeout(timeout);
-        }
-    }
-
-    throw new Error(`Alle proxies faalden voor ${url}: ${failures.join(' | ')}`);
-}
-
-// === RSS via rss2json: server-side ophalen + parsen, met proper CORS-header ===
-// Vermijdt de meeste publieke proxy-problemen. Gratis tier: ~10k requests/dag.
-async function fetchRSSItems(feedUrl) {
-    // Geen count-parameter: gratis tier weigert >10 (HTTP 422). Default volstaat
-    // doorgaans (~20 items). Voor meer is een gratis API-key nodig.
-    const apiUrl = `${RSS2JSON_API}?rss_url=${encodeURIComponent(feedUrl)}`;
+// === Feed ophalen via eigen Cloudflare Worker ===
+// Stabiel, 100k requests/dag gratis. Geeft de XML/RSS-response rechtstreeks
+// terug met de juiste CORS-headers.
+async function fetchViaProxy(url) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
     try {
-        const response = await fetch(apiUrl, { signal: controller.signal, cache: 'no-store' });
-        if (!response.ok) throw new Error(`rss2json HTTP ${response.status}`);
-        const data = await response.json();
-        if (data.status !== 'ok' || !Array.isArray(data.items)) {
-            throw new Error(`rss2json status: ${data.status || 'onbekend'}`);
+        const response = await fetch(`${FEED_PROXY}${encodeURIComponent(url)}`, {
+            signal: controller.signal,
+            cache: 'no-store',
+        });
+        if (!response.ok) {
+            throw new Error(`Proxy HTTP ${response.status}`);
         }
-        return data.items;
+        const text = await response.text();
+        if (!text || !text.trim()) {
+            throw new Error('Lege response');
+        }
+        return text;
     } finally {
         clearTimeout(timeout);
     }
+}
+
+// Parseert een RSS-XML string naar een uniforme item-structuur.
+function parseRSS(text) {
+    const xml = new DOMParser().parseFromString(text, 'text/xml');
+    return Array.from(xml.querySelectorAll('item')).map(item => ({
+        title: (item.querySelector('title')?.textContent || '').trim(),
+        link: item.querySelector('link')?.textContent || '#',
+        pubDate: item.querySelector('pubDate')?.textContent || '',
+        description: item.querySelector('description')?.textContent || '',
+        // content:encoded staat in een namespace; querySelector pakt 'm met de :
+        content: item.getElementsByTagNameNS('*', 'encoded')[0]?.textContent || '',
+    }));
 }
 
 // Filter items op publicatiedatum: laat alleen items van de afgelopen N dagen zien.
@@ -127,18 +99,6 @@ function isRecent(pubDate, maxDays = NEWS_MAX_AGE_DAYS) {
     if (isNaN(ts)) return true;
     const cutoff = Date.now() - maxDays * 24 * 60 * 60 * 1000;
     return ts >= cutoff;
-}
-
-// Hosts waarvan we weten dat ze CORS-headers sturen, zodat we daarvoor de
-// proxy kunnen overslaan en een direct fetch kunnen doen zonder console-noise.
-const DIRECT_FETCH_HOSTS = ['omnycontent.com', 'www.omnycontent.com'];
-function supportsDirectFetch(url) {
-    try {
-        const host = new URL(url).hostname;
-        return DIRECT_FETCH_HOSTS.includes(host);
-    } catch {
-        return false;
-    }
 }
 
 // === Nieuws laden ===
@@ -195,17 +155,22 @@ async function loadNieuws(forceRefresh = false) {
     renderNieuws(items);
 }
 
-// Google News RSS via rss2json: aggregator van diverse Nederlandse bronnen,
+// Google News RSS via eigen proxy. Aggregator van diverse Nederlandse bronnen,
 // gefilterd op toegestane bronnen.
 async function fetchGoogleNews() {
     try {
-        const items = await fetchRSSItems(GOOGLE_NEWS_RSS);
+        const text = await fetchViaProxy(GOOGLE_NEWS_RSS);
+        const items = parseRSS(text);
+        // Google News zet de bron in een <source> element binnen elk item.
+        const xml = new DOMParser().parseFromString(text, 'text/xml');
+        const itemNodes = Array.from(xml.querySelectorAll('item'));
         return items
-            .map(item => ({
-                title: cleanTitle(item.title || ''),
-                link: item.link || '#',
-                pubDate: item.pubDate || '',
-                source: extractGoogleNewsSource(item),
+            .map((item, i) => ({
+                title: cleanTitle(item.title),
+                link: item.link,
+                pubDate: item.pubDate,
+                source: itemNodes[i]?.querySelector('source')?.textContent
+                    || extractGoogleNewsSource(item),
             }))
             .filter(item => {
                 const src = item.source.toLowerCase();
@@ -216,10 +181,8 @@ async function fetchGoogleNews() {
     }
 }
 
-// Google News verwerkt de bron meestal als suffix in de title (" - Bron")
-// of in description; rss2json zet 'm soms in author. Probeer alle plekken.
+// Fallback wanneer <source> niet aanwezig is: bron staat soms in titel ("- Bron").
 function extractGoogleNewsSource(item) {
-    if (item.author) return item.author;
     const title = item.title || '';
     const dashParts = title.split(' - ');
     if (dashParts.length > 1) return dashParts[dashParts.length - 1];
@@ -238,13 +201,13 @@ async function fetchOmropFryslanNieuws() {
 
 async function fetchOmropFryslanFiltered(feedUrl) {
     try {
-        const items = await fetchRSSItems(feedUrl);
-        return items
+        const text = await fetchViaProxy(feedUrl);
+        return parseRSS(text)
             .filter(itemMentionsCambuur)
             .map(item => ({
-                title: (item.title || '').trim(),
-                link: item.link || '#',
-                pubDate: item.pubDate || '',
+                title: item.title,
+                link: item.link,
+                pubDate: item.pubDate,
                 source: 'Omrop Fryslân',
             }));
     } catch {
@@ -252,22 +215,14 @@ async function fetchOmropFryslanFiltered(feedUrl) {
     }
 }
 
-// Officiële Cambuur.nl feed: rss2json blokkeert deze feed (levert lege items),
-// daarom halen we hem op via de proxy en parsen we de XML zelf.
-// We valideren dat de response écht RSS-items bevat, zodat proxy-foutpagina's
-// (die ook 200 teruggeven) worden overgeslagen.
+// Officiële Cambuur.nl feed: alle items zijn relevant.
 async function fetchCambuurNL() {
     try {
-        const isRSS = text => text.includes('<item');
-        const text = await fetchViaProxy(CAMBUUR_NL_RSS, isRSS);
-        const parser = new DOMParser();
-        const xml = parser.parseFromString(text, 'text/xml');
-        const items = xml.querySelectorAll('item');
-        if (!items.length) return [];
-        return Array.from(items).map(item => ({
-            title: (item.querySelector('title')?.textContent || '').trim(),
-            link: item.querySelector('link')?.textContent || '#',
-            pubDate: item.querySelector('pubDate')?.textContent || '',
+        const text = await fetchViaProxy(CAMBUUR_NL_RSS);
+        return parseRSS(text).map(item => ({
+            title: item.title,
+            link: item.link,
+            pubDate: item.pubDate,
             source: 'Cambuur.nl',
         }));
     } catch {
@@ -278,13 +233,13 @@ async function fetchCambuurNL() {
 // Leeuwarder Courant: brede regionale feed, filter op Cambuur.
 async function fetchLeeuwarderCourant() {
     try {
-        const items = await fetchRSSItems(LC_RSS);
-        return items
+        const text = await fetchViaProxy(LC_RSS);
+        return parseRSS(text)
             .filter(itemMentionsCambuur)
             .map(item => ({
-                title: (item.title || '').trim(),
-                link: item.link || '#',
-                pubDate: item.pubDate || '',
+                title: item.title,
+                link: item.link,
+                pubDate: item.pubDate,
                 source: 'Leeuwarder Courant',
             }));
     } catch {
@@ -547,23 +502,7 @@ async function loadPodcasts(forceRefresh = false) {
 
 async function fetchPodcastFeed(feedUrl, podcastName, publisher) {
     try {
-        let text;
-        // Sommige podcast-CDN's (zoals Omny) sturen CORS-headers; probeer die direct.
-        // Voor andere hosts (bv. argyf2.omropfryslan.nl) levert direct fetchen
-        // alleen een CORS-error in de console op, dus die slaan we direct over.
-        if (supportsDirectFetch(feedUrl)) {
-            try {
-                const direct = await fetch(feedUrl, { cache: 'no-store' });
-                if (direct.ok) {
-                    text = await direct.text();
-                }
-            } catch {
-                // Negeer; val terug op proxy.
-            }
-        }
-        if (!text) {
-            text = await fetchViaProxy(feedUrl);
-        }
+        const text = await fetchViaProxy(feedUrl);
         const parser = new DOMParser();
         const xml = parser.parseFromString(text, 'text/xml');
         const items = xml.querySelectorAll('item');

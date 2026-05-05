@@ -203,6 +203,23 @@ header h1 .accent {
     color: inherit;
     display: block;
     border-left: 4px solid var(--cambuur-geel);
+    overflow: hidden;
+}
+
+.news-card.has-image {
+    padding: 0;
+}
+
+.news-card.has-image .news-body {
+    padding: 1rem 1.1rem;
+}
+
+.news-image {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    background: #eef1f5;
 }
 
 .news-card:hover {

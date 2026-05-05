@@ -3,11 +3,13 @@
 const GOOGLE_NEWS_RSS = 'https://news.google.com/rss/search?q=%22SC+Cambuur%22+OR+%22Cambuur%22&hl=nl&gl=NL&ceid=NL:nl';
 const OMROP_SPORT_RSS = 'https://www.omropfryslan.nl/rss/sport.xml';
 const OMROP_NIEUWS_RSS = 'https://www.omropfryslan.nl/rss/nieuws.xml';
-const CAMBUUR_NL_SITEMAP_INDEX = 'https://www.cambuur.nl/sitemap.xml';
 const LC_RSS = 'https://lc.nl/api/feed/rss';
 // Eigen Cloudflare Worker als CORS-proxy. Stabiel, zonder rate-limits, en
 // vervangt alle eerdere publieke proxies + rss2json.
 const FEED_PROXY = 'https://cambuur-feed-proxy.ewoudwesterhuis.workers.dev/?url=';
+// Dedicated endpoint op de Worker dat sitemap + artikel-pagina's van cambuur.nl
+// scrapt en kant-en-klare JSON teruggeeft (titel, datum, beschrijving, beeld).
+const CAMBUUR_NEWS_ENDPOINT = 'https://cambuur-feed-proxy.ewoudwesterhuis.workers.dev/?endpoint=cambuur-news';
 const PROXY_TIMEOUT_MS = 10000;
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
 const CAMBUUR_YT_RSS = 'https://www.youtube.com/feeds/videos.xml?channel_id=UCnZJsm8wS5_ZWPRHPINWeEw';
@@ -35,6 +37,7 @@ const nieuwsList = document.getElementById('nieuws-list');
 const videosList = document.getElementById('videos-list');
 const podcastsList = document.getElementById('podcasts-list');
 const refreshBtn = document.getElementById('refreshBtn');
+const footerText = document.getElementById('footer-text');
 const tabs = document.querySelectorAll('.tab');
 
 // === Tabs ===
@@ -215,70 +218,33 @@ async function fetchOmropFryslanFiltered(feedUrl) {
     }
 }
 
-// Cambuur.nl publiceert helaas een lege RSS-feed. We gebruiken in plaats daarvan
-// hun XML-sitemap, die wél alle nieuwsartikelen met datum bevat. Titels leiden
-// we af uit de URL-slug.
+// Cambuur.nl: artikelen via dedicated Worker-endpoint. De Worker scrapt
+// sitemap + artikel-pagina's en levert nette titels, datums, beschrijvingen
+// en og:image's. Cloudflare cachet 10 minuten op de edge.
 async function fetchCambuurNL() {
     try {
-        // Stap 1: sitemap-index ophalen en de meest recente nieuws-sitemap vinden.
-        const indexXml = new DOMParser().parseFromString(
-            await fetchViaProxy(CAMBUUR_NL_SITEMAP_INDEX),
-            'text/xml',
-        );
-        // Yoast paginert oud → nieuw: 'nieuws-sitemap.xml' (zonder nummer) is
-        // de oudste batch (2014), 'nieuws-sitemapN.xml' met hoogste N is de
-        // nieuwste. Lastmod is op álle batches gelijk (Yoast update ze samen),
-        // dus we sorteren op het batch-nummer in de URL.
-        const newsSitemaps = Array.from(indexXml.querySelectorAll('sitemap'))
-            .map(s => ({
-                loc: s.querySelector('loc')?.textContent || '',
-                lastmod: s.querySelector('lastmod')?.textContent || '',
-            }))
-            .filter(s => /\/nieuws-sitemap\d*\.xml$/.test(s.loc))
-            .map(s => {
-                const match = s.loc.match(/nieuws-sitemap(\d*)\.xml$/);
-                const num = match && match[1] ? parseInt(match[1], 10) : 1;
-                return { ...s, num };
-            })
-            .sort((a, b) => b.num - a.num);
-
-        if (!newsSitemaps.length) return [];
-
-        // Stap 2: meest recente nieuws-sitemap parsen.
-        const sitemapXml = new DOMParser().parseFromString(
-            await fetchViaProxy(newsSitemaps[0].loc),
-            'text/xml',
-        );
-
-        return Array.from(sitemapXml.querySelectorAll('url')).map(urlNode => {
-            const link = urlNode.querySelector('loc')?.textContent || '#';
-            const lastmod = urlNode.querySelector('lastmod')?.textContent || '';
-            return {
-                title: titleFromCambuurUrl(link),
-                link,
-                pubDate: lastmod,
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
+        try {
+            const response = await fetch(CAMBUUR_NEWS_ENDPOINT, {
+                signal: controller.signal,
+            });
+            if (!response.ok) throw new Error(`Worker HTTP ${response.status}`);
+            const articles = await response.json();
+            if (!Array.isArray(articles)) return [];
+            return articles.map(a => ({
+                title: a.title,
+                link: a.link,
+                pubDate: a.pubDate,
+                description: a.description || '',
+                image: a.image || '',
                 source: 'Cambuur.nl',
-            };
-        });
+            }));
+        } finally {
+            clearTimeout(timeout);
+        }
     } catch {
         return [];
-    }
-}
-
-// Maak een leesbare titel van een Cambuur-URL slug.
-// Bijv: ".../nieuws/sc-cambuur-terug-in-de-eredivisie/" → "SC Cambuur terug in de eredivisie"
-function titleFromCambuurUrl(url) {
-    try {
-        const slug = new URL(url).pathname
-            .replace(/^\/nieuws\//, '')
-            .replace(/\/$/, '');
-        if (!slug) return '';
-        const text = slug.replace(/-/g, ' ').trim();
-        // Eerste letter hoofdletter; "sc cambuur" → "SC Cambuur"
-        const capitalized = text.charAt(0).toUpperCase() + text.slice(1);
-        return capitalized.replace(/\bsc cambuur\b/gi, 'SC Cambuur');
-    } catch {
-        return url;
     }
 }
 
@@ -327,15 +293,22 @@ function renderNieuws(items) {
         return;
     }
 
-    nieuwsList.innerHTML = items.map(item => `
-        <a href="${escapeHtml(item.link)}" class="news-card" target="_blank" rel="noopener">
-            <h3>${escapeHtml(item.title)}</h3>
-            <div class="news-meta">
-                <span class="news-source">${escapeHtml(item.source)}</span>
-                <time data-date="${escapeHtml(item.pubDate)}">${formatDate(item.pubDate)}</time>
+    nieuwsList.innerHTML = items.map(item => {
+        const imageHtml = item.image
+            ? `<img class="news-image" src="${escapeHtml(item.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+            : '';
+        return `
+        <a href="${escapeHtml(item.link)}" class="news-card${item.image ? ' has-image' : ''}" target="_blank" rel="noopener">
+            ${imageHtml}
+            <div class="news-body">
+                <h3>${escapeHtml(item.title)}</h3>
+                <div class="news-meta">
+                    <span class="news-source">${escapeHtml(item.source)}</span>
+                    <time data-date="${escapeHtml(item.pubDate)}">${formatDate(item.pubDate)}</time>
+                </div>
             </div>
-        </a>
-    `).join('');
+        </a>`;
+    }).join('');
 }
 
 // === Video's laden ===
@@ -507,6 +480,12 @@ function setCache(key, data) {
     }
 }
 
+function updateFooterYear() {
+    if (!footerText) return;
+    const year = new Date().getFullYear();
+    footerText.textContent = `© ${year} Cambuur 360. Alles rondom Cambuur.`;
+}
+
 // === Podcasts laden ===
 function formatDuration(raw) {
     if (!raw) return '';
@@ -622,6 +601,7 @@ setInterval(() => {
 }, CACHE_DURATION);
 
 // === Start! ===
+updateFooterYear();
 loadNieuws();
 loadVideos();
 loadPodcasts();

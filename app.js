@@ -58,7 +58,9 @@ refreshBtn.addEventListener('click', () => {
 });
 
 // === Proxy helper: probeer proxies één voor één ===
-async function fetchViaProxy(url) {
+// validate: optionele functie die checkt of de response inhoud bruikbaar is.
+// Zo kunnen we detecteren dat een proxy een 200-foutpagina stuurt i.p.v. echte data.
+async function fetchViaProxy(url, validate = null) {
     const failures = [];
 
     // Probeer proxies sequentieel: minder foutmeldingen dan alles tegelijk laten falen.
@@ -79,6 +81,10 @@ async function fetchViaProxy(url) {
             const text = await response.text();
             if (!text || !text.trim()) {
                 throw new Error('Lege response');
+            }
+
+            if (validate && !validate(text)) {
+                throw new Error('Ongeldige response-inhoud (proxy-foutpagina?)');
             }
 
             return text;
@@ -248,9 +254,12 @@ async function fetchOmropFryslanFiltered(feedUrl) {
 
 // Officiële Cambuur.nl feed: rss2json blokkeert deze feed (levert lege items),
 // daarom halen we hem op via de proxy en parsen we de XML zelf.
+// We valideren dat de response écht RSS-items bevat, zodat proxy-foutpagina's
+// (die ook 200 teruggeven) worden overgeslagen.
 async function fetchCambuurNL() {
     try {
-        const text = await fetchViaProxy(CAMBUUR_NL_RSS);
+        const isRSS = text => text.includes('<item');
+        const text = await fetchViaProxy(CAMBUUR_NL_RSS, isRSS);
         const parser = new DOMParser();
         const xml = parser.parseFromString(text, 'text/xml');
         const items = xml.querySelectorAll('item');

@@ -91,7 +91,33 @@ function parseRSS(text) {
         description: item.querySelector('description')?.textContent || '',
         // content:encoded staat in een namespace; querySelector pakt 'm met de :
         content: item.getElementsByTagNameNS('*', 'encoded')[0]?.textContent || '',
+        image: extractImage(item),
     }));
+}
+
+// Probeer een afbeelding te vinden bij een RSS-item via diverse conventies:
+// 1) <enclosure type="image/..." url="...">
+// 2) <media:content url="..."> / <media:thumbnail url="...">
+// 3) eerste <img src="..."> in description of content:encoded
+function extractImage(item) {
+    const enclosures = item.querySelectorAll('enclosure');
+    for (const enc of enclosures) {
+        const type = enc.getAttribute('type') || '';
+        const url = enc.getAttribute('url') || '';
+        if (url && type.startsWith('image')) return url;
+    }
+    const media = item.getElementsByTagNameNS('*', 'content')[0]
+        || item.getElementsByTagNameNS('*', 'thumbnail')[0];
+    if (media) {
+        const url = media.getAttribute('url');
+        if (url) return url;
+    }
+    const haystack = (item.querySelector('description')?.textContent || '')
+        + ' '
+        + (item.getElementsByTagNameNS('*', 'encoded')[0]?.textContent || '');
+    const imgMatch = haystack.match(/<img[^>]+src=["']([^"']+)["']/i);
+    if (imgMatch) return imgMatch[1];
+    return '';
 }
 
 // Filter items op publicatiedatum: laat alleen items van de afgelopen N dagen zien.
@@ -172,6 +198,7 @@ async function fetchGoogleNews() {
                 title: cleanTitle(item.title),
                 link: item.link,
                 pubDate: item.pubDate,
+                image: item.image || '',
                 source: itemNodes[i]?.querySelector('source')?.textContent
                     || extractGoogleNewsSource(item),
             }))
@@ -211,6 +238,7 @@ async function fetchOmropFryslanFiltered(feedUrl) {
                 title: item.title,
                 link: item.link,
                 pubDate: item.pubDate,
+                image: item.image || '',
                 source: 'Omrop Fryslân',
             }));
     } catch {
@@ -258,6 +286,7 @@ async function fetchLeeuwarderCourant() {
                 title: item.title,
                 link: item.link,
                 pubDate: item.pubDate,
+                image: item.image || '',
                 source: 'Leeuwarder Courant',
             }));
     } catch {

@@ -225,13 +225,22 @@ async function fetchCambuurNL() {
             await fetchViaProxy(CAMBUUR_NL_SITEMAP_INDEX),
             'text/xml',
         );
+        // Yoast paginert oud → nieuw: 'nieuws-sitemap.xml' (zonder nummer) is
+        // de oudste batch (2014), 'nieuws-sitemapN.xml' met hoogste N is de
+        // nieuwste. Lastmod is op álle batches gelijk (Yoast update ze samen),
+        // dus we sorteren op het batch-nummer in de URL.
         const newsSitemaps = Array.from(indexXml.querySelectorAll('sitemap'))
             .map(s => ({
                 loc: s.querySelector('loc')?.textContent || '',
                 lastmod: s.querySelector('lastmod')?.textContent || '',
             }))
-            .filter(s => s.loc.includes('nieuws-sitemap'))
-            .sort((a, b) => new Date(b.lastmod) - new Date(a.lastmod));
+            .filter(s => /\/nieuws-sitemap\d*\.xml$/.test(s.loc))
+            .map(s => {
+                const match = s.loc.match(/nieuws-sitemap(\d*)\.xml$/);
+                const num = match && match[1] ? parseInt(match[1], 10) : 1;
+                return { ...s, num };
+            })
+            .sort((a, b) => b.num - a.num);
 
         if (!newsSitemaps.length) return [];
 

@@ -28,7 +28,6 @@ const GOOGLE_IMAGE_LOOKUP_CACHE_MAX = 300;
 
 // === Toegestane nieuwsbronnen ===
 const ALLOWED_SOURCES = [
-    'cambuur.nl', 'sportclub cambuur',
     'leeuwarder courant', 'lc.nl',
     'omrop fryslân', 'omrop fryslan', 'omropfryslan.nl',
     'voetbalzone',
@@ -595,8 +594,7 @@ function setCache(key, data) {
 
 function updateFooterYear() {
     if (!footerText) return;
-    const year = new Date().getFullYear();
-    footerText.textContent = `${year} Cambuur 360. Alles rondom Cambuur.`;
+    footerText.textContent = 'Cambuur 360. Alles rondom Cambuur.';
 }
 
 // === Podcasts laden ===

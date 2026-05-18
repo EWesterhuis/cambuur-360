@@ -32,8 +32,7 @@ De app heeft één hoofdscherm met drie tabbladen: **Nieuws**, **Video's**, **Po
 ### 2.2 Tab — Nieuws
 - Toont een gecombineerde, gededuplicereerde nieuwslijst van de afgelopen 30 dagen.
 - Bronnen worden parallel opgehaald; één falende bron blokkeert de rest niet.
-- Bronnen worden gefilterd op een whitelist (`ALLOWED_SOURCES`): cambuur.nl, Leeuwarder Courant, Omrop Fryslân, Voetbalzone, Voetbal International.
-- Bronlabel-normalisatie: items met bronnaam `Sportclub Cambuur` (uit Google News RSS) worden getoond als `Cambuur.nl`.
+- Bronnen worden gefilterd op een whitelist (`ALLOWED_SOURCES`): Leeuwarder Courant, Omrop Fryslân, Voetbalzone, Voetbal International. Cambuur.nl-artikelen komen uitsluitend via de dedicated Worker-endpoint (geen dubbele ophaalmethode via Google News).
 - Per artikel: kop, bron-label, relatieve publicatiedatum ("3 uur geleden") en — indien beschikbaar — een afbeelding.
 - Google News RSS levert doorgaans geen item-afbeelding mee (`enclosure`/`media:*`/`<img>` ontbreekt), waardoor Google-items vaak zonder afbeelding worden getoond.
 - Best-effort fallback: voor een beperkt aantal Google-items zonder afbeelding wordt via de proxy de artikel-HTML opgehaald en `og:image`/`twitter:image` uitgelezen; resultaten worden tijdelijk gecachet.
@@ -57,7 +56,7 @@ De app heeft één hoofdscherm met drie tabbladen: **Nieuws**, **Video's**, **Po
 - Afspelen gebeurt binnen de app.
 
 ### 2.5 Footer
-- Toont tekst met dynamisch huidige jaartal: `<jaar> Cambuur 360. Alles rondom Cambuur.`
+- Toont statische tekst: `Cambuur 360. Alles rondom Cambuur.`
 
 ---
 
@@ -195,6 +194,7 @@ De app heeft één hoofdscherm met drie tabbladen: **Nieuws**, **Video's**, **Po
 
 | Datum | Hoofdstuk(ken) | Wijziging | Door |
 |-------|----------------|-----------|------|
+| 2026-05-18 | 2.2, 2.5, 8 | Cambuur.nl verwijderd uit Google News whitelist (voorkomt dubbele ophaalmethode en verkeerde afbeeldingen); jaartal uit footer verwijderd. | GitHub Copilot |
 | 2026-05-18 | 2.2, 8 | Best-effort afbeeldingsfallback toegevoegd voor Google RSS-items via `og:image`/`twitter:image` lookup met cache. | GitHub Copilot |
 | 2026-05-18 | 2.2, 8 | Bronlabel `Sportclub Cambuur` gelijkgetrokken naar `Cambuur.nl`; Google RSS-afbeeldingsbeperking gedocumenteerd. | GitHub Copilot |
 | 2026-05-18 | 2.5, 7, 8 | Copyright-teken verwijderd uit footertekst in app en ontwerpbeschrijving. | GitHub Copilot |

@@ -19,9 +19,12 @@ const HERTENKAMP_RSS = 'https://www.omnycontent.com/d/playlist/fdd7ab40-270d-4a1
 const CACHE_KEY_NEWS = 'cambuur_news_cache';
 const CACHE_KEY_VIDEOS = 'cambuur_videos_cache';
 const CACHE_KEY_PODCASTS = 'cambuur_podcasts_cache';
+const CACHE_KEY_GOOGLE_IMAGE_LOOKUP = 'cambuur_google_image_lookup_cache';
 const YOUTUBE_API_KEY = 'AIzaSyDsYe8VstT2pGXedH1O1Q_3pjWfIqVSBPc';
 let kkdSearchDisabled = false;
 const CACHE_DURATION = 30 * 60 * 1000; // 30 minuten
+const GOOGLE_IMAGE_LOOKUP_LIMIT = 6;
+const GOOGLE_IMAGE_LOOKUP_CACHE_MAX = 300;
 
 // === Toegestane nieuwsbronnen ===
 const ALLOWED_SOURCES = [
@@ -193,22 +196,91 @@ async function fetchGoogleNews() {
         // Google News zet de bron in een <source> element binnen elk item.
         const xml = new DOMParser().parseFromString(text, 'text/xml');
         const itemNodes = Array.from(xml.querySelectorAll('item'));
-        return items
+        const filtered = items
             .map((item, i) => ({
                 title: cleanTitle(item.title),
                 link: item.link,
                 pubDate: item.pubDate,
                 image: item.image || '',
-                source: itemNodes[i]?.querySelector('source')?.textContent
-                    || extractGoogleNewsSource(item),
+                source: normalizeNewsSource(
+                    itemNodes[i]?.querySelector('source')?.textContent
+                    || extractGoogleNewsSource(item)
+                ),
             }))
             .filter(item => {
                 const src = item.source.toLowerCase();
                 return ALLOWED_SOURCES.some(allowed => src.includes(allowed));
             });
+
+        return await enrichGoogleNewsImages(filtered);
     } catch {
         return [];
     }
+}
+
+async function enrichGoogleNewsImages(items) {
+    if (!items.length) return items;
+
+    const imageCache = getCache(CACHE_KEY_GOOGLE_IMAGE_LOOKUP) || {};
+    const needsLookup = [];
+
+    for (const item of items) {
+        if (item.image) continue;
+
+        if (Object.prototype.hasOwnProperty.call(imageCache, item.link)) {
+            item.image = imageCache[item.link] || '';
+            continue;
+        }
+
+        if (needsLookup.length < GOOGLE_IMAGE_LOOKUP_LIMIT) {
+            needsLookup.push(item);
+        }
+    }
+
+    await Promise.allSettled(needsLookup.map(async (item) => {
+        const image = await fetchOgImageForGoogleItem(item.link);
+        imageCache[item.link] = image || '';
+        if (image) item.image = image;
+    }));
+
+    trimLookupCache(imageCache, GOOGLE_IMAGE_LOOKUP_CACHE_MAX);
+    setCache(CACHE_KEY_GOOGLE_IMAGE_LOOKUP, imageCache);
+    return items;
+}
+
+async function fetchOgImageForGoogleItem(url) {
+    try {
+        const html = await fetchViaProxy(url);
+        return extractOgImageFromHtml(html);
+    } catch {
+        return '';
+    }
+}
+
+function extractOgImageFromHtml(html) {
+    if (!html || !html.trim()) return '';
+
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const metaSelectors = [
+        'meta[property="og:image"]',
+        'meta[property="og:image:url"]',
+        'meta[name="twitter:image"]',
+        'meta[name="twitter:image:src"]',
+    ];
+
+    for (const selector of metaSelectors) {
+        const value = doc.querySelector(selector)?.getAttribute('content')?.trim() || '';
+        if (value) return value;
+    }
+
+    const imgSrc = doc.querySelector('article img, main img, img')?.getAttribute('src')?.trim() || '';
+    return imgSrc;
+}
+
+function trimLookupCache(cache, maxEntries) {
+    const keys = Object.keys(cache);
+    if (keys.length <= maxEntries) return;
+    keys.slice(0, keys.length - maxEntries).forEach(key => delete cache[key]);
 }
 
 // Fallback wanneer <source> niet aanwezig is: bron staat soms in titel ("- Bron").
@@ -314,6 +386,18 @@ function cleanTitle(title) {
         return parts.join(' - ');
     }
     return title;
+}
+
+function normalizeNewsSource(source) {
+    const src = (source || '').trim();
+    if (!src) return 'Onbekend';
+
+    const lowered = src.toLowerCase();
+    if (lowered.includes('sportclub cambuur') || lowered.includes('cambuur.nl')) {
+        return 'Cambuur.nl';
+    }
+
+    return src;
 }
 
 function renderNieuws(items) {
@@ -512,7 +596,7 @@ function setCache(key, data) {
 function updateFooterYear() {
     if (!footerText) return;
     const year = new Date().getFullYear();
-    footerText.textContent = `© ${year} Cambuur 360. Alles rondom Cambuur.`;
+    footerText.textContent = `${year} Cambuur 360. Alles rondom Cambuur.`;
 }
 
 // === Podcasts laden ===

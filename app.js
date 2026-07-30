@@ -178,11 +178,14 @@ function mergeNewsArchive(archive, fresh) {
         const existing = byLink.get(item.link);
         if (existing) {
             byLink.set(item.link, {
-                title: existing.title || item.title,
+                // Fresh wint bij niet-lege title/source: zo worden eerdere
+                // vervuilde entries (bv. "Titel - LC" of source "Google News")
+                // vanzelf opgeschoond zodra de Worker een schone versie levert.
+                title: item.title || existing.title,
                 link: item.link,
                 pubDate: existing.pubDate || item.pubDate,
                 image: existing.image || item.image || '',
-                source: existing.source || item.source,
+                source: item.source || existing.source,
                 firstSeen: existing.firstSeen || now,
             });
         } else {

@@ -3,13 +3,22 @@
 const GOOGLE_NEWS_RSS = 'https://news.google.com/rss/search?q=%22SC+Cambuur%22+OR+%22Cambuur%22&hl=nl&gl=NL&ceid=NL:nl';
 const OMROP_SPORT_RSS = 'https://www.omropfryslan.nl/rss/sport.xml';
 const OMROP_NIEUWS_RSS = 'https://www.omropfryslan.nl/rss/nieuws.xml';
-const LC_RSS = 'https://lc.nl/api/feed/rss';
+// Sinds de LC-website-vernieuwing (2026) is de oude endpoint `lc.nl/api/feed/rss`
+// vervangen door een klassieke RSS 2.0-feed op `www.lc.nl/rss`. De brede feed
+// wordt gebruikt zodat ook niet-sport-artikelen over Cambuur (bv. regio) worden
+// meegenomen; het `itemMentionsCambuur`-filter zeeft de rest weg.
+const LC_RSS = 'https://www.lc.nl/rss';
 // Eigen Cloudflare Worker als CORS-proxy. Stabiel, zonder rate-limits, en
 // vervangt alle eerdere publieke proxies + rss2json.
 const FEED_PROXY = 'https://cambuur-feed-proxy.ewoudwesterhuis.workers.dev/?url=';
 // Dedicated endpoint op de Worker dat sitemap + artikel-pagina's van cambuur.nl
 // scrapt en kant-en-klare JSON teruggeeft (titel, datum, beschrijving, beeld).
 const CAMBUUR_NEWS_ENDPOINT = 'https://cambuur-feed-proxy.ewoudwesterhuis.workers.dev/?endpoint=cambuur-news';
+// Centrale nieuws-archief-Worker: houdt via een 15-minuten cron een
+// server-side archief bij in Workers KV. Één snelle request levert de laatste
+// ~90 dagen aan artikelen op, zodat gebruikers ook artikelen terugzien die
+// tussentijds uit de RSS-feeds zijn verdwenen — ongeacht op welk device.
+const NEWS_ARCHIVE_ENDPOINT = 'https://cambuur-news-archive.ewoudwesterhuis.workers.dev/';
 const PROXY_TIMEOUT_MS = 10000;
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
 const CAMBUUR_YT_RSS = 'https://www.youtube.com/feeds/videos.xml?channel_id=UCnZJsm8wS5_ZWPRHPINWeEw';
@@ -25,6 +34,9 @@ let kkdSearchDisabled = false;
 const CACHE_DURATION = 30 * 60 * 1000; // 30 minuten
 const GOOGLE_IMAGE_LOOKUP_LIMIT = 6;
 const GOOGLE_IMAGE_LOOKUP_CACHE_MAX = 300;
+// Nieuws-archief: bewaar tot dit aantal items in localStorage zodat artikelen
+// zichtbaar blijven ook nadat ze uit de RSS-feeds zijn verdwenen.
+const NEWS_ARCHIVE_MAX_ITEMS = 150;
 
 // === Toegestane nieuwsbronnen ===
 const ALLOWED_SOURCES = [
@@ -132,21 +144,109 @@ function isRecent(pubDate, maxDays = NEWS_MAX_AGE_DAYS) {
     return ts >= cutoff;
 }
 
-// === Nieuws laden ===
-async function loadNieuws(forceRefresh = false) {
-    // Check cache
-    if (!forceRefresh) {
-        const cached = getCache(CACHE_KEY_NEWS);
-        if (cached) {
-            renderNieuws(cached);
-            return;
+// Effectieve leeftijd van een item: gebruik pubDate; als die ontbreekt/ongeldig
+// is, val terug op firstSeen (moment waarop het item in het archief kwam).
+function getItemAge(item) {
+    if (item?.pubDate) {
+        const ts = new Date(item.pubDate).getTime();
+        if (!isNaN(ts)) return ts;
+    }
+    return Number(item?.firstSeen) || 0;
+}
+
+// Merge een verse fetch met het bestaande archief.
+// - Dedupliceert op link (stabiele identifier per artikel).
+// - Stempelt nieuwe items met firstSeen zodat items zonder pubDate ook
+//   correct verouderen en gesorteerd kunnen worden.
+// - Filtert items ouder dan NEWS_MAX_AGE_DAYS weg.
+// - Dedupliceert cross-source op genormaliseerde titel (Google News mirrort
+//   soms artikelen die ook direct via LC/Omrop binnenkomen).
+// - Trimt tot NEWS_ARCHIVE_MAX_ITEMS.
+// - Bewaart alleen velden die we renderen zodat de localStorage-footprint
+//   klein blijft.
+function mergeNewsArchive(archive, fresh) {
+    const now = Date.now();
+    const cutoff = now - NEWS_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+    const byLink = new Map();
+
+    for (const item of archive || []) {
+        if (item?.link) byLink.set(item.link, { ...item });
+    }
+
+    for (const item of fresh || []) {
+        if (!item?.link) continue;
+        const existing = byLink.get(item.link);
+        if (existing) {
+            byLink.set(item.link, {
+                title: existing.title || item.title,
+                link: item.link,
+                pubDate: existing.pubDate || item.pubDate,
+                image: existing.image || item.image || '',
+                source: existing.source || item.source,
+                firstSeen: existing.firstSeen || now,
+            });
+        } else {
+            byLink.set(item.link, {
+                title: item.title,
+                link: item.link,
+                pubDate: item.pubDate,
+                image: item.image || '',
+                source: item.source,
+                firstSeen: now,
+            });
         }
     }
 
-    nieuwsList.innerHTML = '<div class="loader">Nieuws laden...</div>';
+    const sorted = Array.from(byLink.values())
+        .filter(item => getItemAge(item) >= cutoff)
+        .sort((a, b) => getItemAge(b) - getItemAge(a));
 
-    // Haal alle bronnen parallel op. Per-bron faalt stil (lege array) zodat één
-    // kapotte feed niet alles blokkeert.
+    // Cross-source dedup op genormaliseerde titel (zelfde artikel via
+    // verschillende bronnen). De nieuwste (bovenaan in sorted) wint.
+    const seenTitles = new Set();
+    const result = [];
+    for (const item of sorted) {
+        const key = (item.title || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 60);
+        if (key && seenTitles.has(key)) continue;
+        if (key) seenTitles.add(key);
+        result.push(item);
+        if (result.length >= NEWS_ARCHIVE_MAX_ITEMS) break;
+    }
+    return result;
+}
+
+// === Nieuws laden ===
+// Stale-while-revalidate: eerst het archief (ook verlopen) direct renderen
+// zodat de gebruiker niet hoeft te wachten. Alleen bij een echt lege lijst
+// tonen we skeleton-kaarten. Op de achtergrond wordt fresh data opgehaald,
+// gemerged met het archief en de UI stil bijgewerkt.
+async function loadNieuws(forceRefresh = false) {
+    const archiveEntry = readCacheRaw(CACHE_KEY_NEWS);
+    const archive = Array.isArray(archiveEntry?.data) ? archiveEntry.data : [];
+    const isStale = !archiveEntry
+        || (Date.now() - archiveEntry.timestamp > CACHE_DURATION)
+        || forceRefresh;
+
+    if (archive.length) {
+        renderNieuws(archive);
+    } else {
+        renderNieuwsSkeleton();
+    }
+
+    if (!isStale) return;
+
+    // 1) Probeer eerst het centrale archief (één snelle request, ~90 dagen data).
+    const centralItems = await fetchCentralArchive();
+    if (centralItems && centralItems.length) {
+        const merged = mergeNewsArchive(archive, centralItems);
+        setCache(CACHE_KEY_NEWS, merged);
+        renderNieuws(merged);
+        return;
+    }
+
+    // 2) Fallback: per-bron parallel ophalen als het centrale archief faalt.
+    //    Per-bron faalt stil (lege array) zodat één kapotte feed niet alles
+    //    blokkeert.
     const [googleItems, omropSportItems, omropNieuwsItems, cambuurItems, lcItems] = await Promise.all([
         fetchGoogleNews(),
         fetchOmropFryslanSport(),
@@ -155,7 +255,7 @@ async function loadNieuws(forceRefresh = false) {
         fetchLeeuwarderCourant(),
     ]);
 
-    const allItems = [
+    const freshItems = [
         ...googleItems,
         ...omropSportItems,
         ...omropNieuwsItems,
@@ -163,27 +263,51 @@ async function loadNieuws(forceRefresh = false) {
         ...lcItems,
     ];
 
-    if (!allItems.length) {
+    if (!freshItems.length && !archive.length) {
         nieuwsList.innerHTML = '<div class="error-message">Kon nieuws niet laden. Probeer het later opnieuw.</div>';
-        const cached = getCache(CACHE_KEY_NEWS);
-        if (cached) renderNieuws(cached);
         return;
     }
 
-    // Combineer en deduplicate op basis van genormaliseerde titel
-    const seen = new Set();
-    const items = allItems
-        .filter(item => isRecent(item.pubDate))
-        .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate))
-        .filter(item => {
-            const key = item.title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 60);
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-        });
+    const merged = mergeNewsArchive(archive, freshItems);
+    setCache(CACHE_KEY_NEWS, merged);
+    renderNieuws(merged);
+}
 
-    setCache(CACHE_KEY_NEWS, items);
-    renderNieuws(items);
+// Haalt het centrale KV-archief op via de dedicated Worker. Retourneert een
+// array van items of null bij fout / lege response, zodat de caller kan
+// beslissen om terug te vallen op per-bron fetches.
+async function fetchCentralArchive() {
+    try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
+        const res = await fetch(NEWS_ARCHIVE_ENDPOINT, { signal: controller.signal });
+        clearTimeout(timer);
+        if (!res.ok) return null;
+        const data = await res.json();
+        const items = Array.isArray(data?.items) ? data.items : null;
+        if (!items || !items.length) return null;
+        return items;
+    } catch {
+        return null;
+    }
+}
+
+// Skeleton-placeholders voor de allereerste render, zolang er nog geen enkel
+// archief-item lokaal beschikbaar is.
+function renderNieuwsSkeleton(count = 6) {
+    const card = `
+        <div class="news-skeleton-card" aria-hidden="true">
+            <div class="skeleton skeleton-image"></div>
+            <div class="skeleton-body">
+                <div class="skeleton skeleton-line skeleton-line-title"></div>
+                <div class="skeleton skeleton-line skeleton-line-title short"></div>
+                <div class="skeleton-meta">
+                    <div class="skeleton skeleton-badge"></div>
+                    <div class="skeleton skeleton-line skeleton-line-date"></div>
+                </div>
+            </div>
+        </div>`;
+    nieuwsList.innerHTML = card.repeat(count);
 }
 
 // Google News RSS via eigen proxy. Aggregator van diverse Nederlandse bronnen,
@@ -579,6 +703,20 @@ function getCache(key) {
         const { data, timestamp } = JSON.parse(raw);
         if (Date.now() - timestamp > CACHE_DURATION) return null;
         return data;
+    } catch {
+        return null;
+    }
+}
+
+// Zoals getCache, maar zonder TTL-check. Nodig voor stale-while-revalidate:
+// we willen ook een verlopen cache kunnen tonen terwijl fresh data laadt.
+function readCacheRaw(key) {
+    try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed.timestamp !== 'number') return null;
+        return parsed;
     } catch {
         return null;
     }

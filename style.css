@@ -374,6 +374,74 @@ header h1 .accent {
     font-size: 1rem;
 }
 
+/* === Skeleton (nieuws first-load placeholder) === */
+.news-skeleton-card {
+    background: var(--wit);
+    border-radius: var(--radius);
+    box-shadow: var(--schaduw);
+    overflow: hidden;
+    border-left: 4px solid var(--grijs-licht);
+    margin-bottom: 0.75rem;
+}
+
+.skeleton {
+    background: linear-gradient(90deg, #eef1f5 0%, #f8f9fb 50%, #eef1f5 100%);
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.4s ease-in-out infinite;
+    border-radius: 4px;
+}
+
+.skeleton-image {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 0;
+}
+
+.skeleton-body {
+    padding: 1rem 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+
+.skeleton-line {
+    height: 0.9rem;
+    width: 100%;
+}
+
+.skeleton-line-title.short {
+    width: 65%;
+}
+
+.skeleton-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 0.25rem;
+}
+
+.skeleton-badge {
+    height: 0.9rem;
+    width: 90px;
+}
+
+.skeleton-line-date {
+    height: 0.8rem;
+    width: 80px;
+}
+
+@keyframes skeleton-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .skeleton {
+        animation: none;
+        background: var(--grijs-licht);
+    }
+}
+
 /* === Error === */
 .error-message {
     text-align: center;

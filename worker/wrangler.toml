@@ -1,0 +1,18 @@
+# Cloudflare Worker config voor het centrale nieuws-archief.
+# Deploy met: wrangler deploy
+#
+# Vereist: een KV namespace met binding CAMBUUR_ARCHIVE (id hieronder invullen).
+# Aanmaken via dashboard of: wrangler kv namespace create "CAMBUUR_ARCHIVE"
+
+name = "cambuur-news-archive"
+main = "news-archive-worker.js"
+compatibility_date = "2025-01-01"
+
+# 5-minuten cron: haalt alle bronnen op, merget en schrijft naar KV.
+[triggers]
+crons = ["*/5 * * * *"]
+
+# KV binding — vul `id` in met de ID uit Cloudflare Dashboard of `wrangler kv namespace create`.
+[[kv_namespaces]]
+binding = "CAMBUUR_ARCHIVE"
+id = "PLACEHOLDER_KV_NAMESPACE_ID"

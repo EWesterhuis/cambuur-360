@@ -28,6 +28,7 @@ const RSS_SOURCES = [
         name: 'Google News',
         url: 'https://news.google.com/rss/search?q=%22SC+Cambuur%22+OR+%22Cambuur%22&hl=nl&gl=NL&ceid=NL:nl',
         mentionsRequired: false,
+        isGoogleNews: true,
     },
     {
         name: 'Omrop Fryslân',
@@ -44,6 +45,17 @@ const RSS_SOURCES = [
         url: 'https://www.lc.nl/rss',
         mentionsRequired: true,
     },
+];
+
+// Toegestane bronnen voor Google News-items. Google News aggregeert wereldwijd
+// veel Nederlandse bronnen; we willen alleen de kwaliteitsbronnen tonen die we
+// ook via directe RSS/scrape ophalen. Voorkomt dat er obscure bronnen zonder
+// beeld of context in het archief belanden.
+const ALLOWED_GOOGLE_SOURCES = [
+    'leeuwarder courant', 'lc.nl',
+    'omrop fryslân', 'omrop fryslan', 'omropfryslan.nl',
+    'voetbalzone',
+    'voetbal international',
 ];
 
 const FETCH_TIMEOUT_MS = 10000;
@@ -128,14 +140,32 @@ async function collectFreshItems() {
     return results.flat();
 }
 
-async function fetchRssSource({ name, url, mentionsRequired }) {
+async function fetchRssSource({ name, url, mentionsRequired, isGoogleNews }) {
     try {
         const xml = await fetchWithTimeout(url);
         if (!xml) return [];
-        const parsed = parseRss(xml).map(item => ({
-            ...item,
-            source: resolveSource(name, item.link, item.description),
-        }));
+        let parsed = parseRss(xml);
+
+        if (isGoogleNews) {
+            // Google News: gebruik de <source>-tag uit het item (echte bron zoals
+            // "Leeuwarder Courant"), en knip de " - Bron"-suffix uit de titel.
+            parsed = parsed
+                .map(item => ({
+                    ...item,
+                    title: cleanTitle(item.title),
+                    source: normalizeSource(item.sourceLabel) || extractSourceFromTitle(item.title) || name,
+                }))
+                .filter(item => {
+                    const src = (item.source || '').toLowerCase();
+                    return ALLOWED_GOOGLE_SOURCES.some(allowed => src.includes(allowed));
+                });
+        } else {
+            parsed = parsed.map(item => ({
+                ...item,
+                source: resolveSource(name, item.link, item.description),
+            }));
+        }
+
         return mentionsRequired ? parsed.filter(itemMentionsCambuur) : parsed;
     } catch {
         return [];
@@ -192,11 +222,14 @@ function mergeArchive(archive, fresh) {
         const existing = byLink.get(item.link);
         if (existing) {
             byLink.set(item.link, {
-                title: existing.title || item.title,
+                // Fresh wint bij niet-lege title/source: zo worden eerdere
+                // vervuilde entries (bv. \"Titel - LC\" of source \"Google News\")
+                // vanzelf opgeschoond zodra een schone versie binnenkomt.
+                title: item.title || existing.title,
                 link: item.link,
                 pubDate: existing.pubDate || item.pubDate,
                 image: existing.image || item.image || '',
-                source: existing.source || item.source,
+                source: item.source || existing.source,
                 firstSeen: existing.firstSeen || now,
             });
         } else {
@@ -211,25 +244,66 @@ function mergeArchive(archive, fresh) {
         }
     }
 
+    // Sanitize: gooi bestaande vervuilde Google-items weg (bronnen buiten de
+    // whitelist die ooit v\u00f3\u00f3r de filter-fix in KV zijn beland). Ook titels
+    // van resterende Google-items ontdoen van de \" - Bron\"-suffix.
+    for (const [link, item] of byLink) {
+        if (isFromGoogleNews(item)) {
+            const src = (item.source || '').toLowerCase();
+            const allowed = ALLOWED_GOOGLE_SOURCES.some(a => src.includes(a));
+            if (!allowed) {
+                byLink.delete(link);
+                continue;
+            }
+            item.title = cleanTitle(item.title);
+        }
+    }
+
     const sorted = Array.from(byLink.values())
         .filter(item => getItemAge(item) >= cutoff)
         .sort((a, b) => getItemAge(b) - getItemAge(a));
 
     // Cross-source dedup op genormaliseerde titel (Google mirrort soms
-    // artikelen die ook direct via LC/Omrop binnenkomen).
-    const seenTitles = new Set();
+    // artikelen die ook direct via LC/Omrop/Cambuur.nl binnenkomen). Voorkeur:
+    // niet-Google-bron met afbeelding boven Google News zonder beeld.
+    const seenTitles = new Map(); // titelhash → index in result
     const result = [];
     for (const item of sorted) {
         const key = (item.title || '')
             .toLowerCase()
             .replace(/[^a-z0-9]/g, '')
             .slice(0, 60);
-        if (key && seenTitles.has(key)) continue;
-        if (key) seenTitles.add(key);
-        result.push(item);
-        if (result.length >= NEWS_ARCHIVE_MAX_ITEMS) break;
+        if (!key) {
+            result.push(item);
+            continue;
+        }
+        if (seenTitles.has(key)) {
+            const idx = seenTitles.get(key);
+            if (isPreferredOver(item, result[idx])) {
+                result[idx] = item;
+            }
+        } else {
+            seenTitles.set(key, result.length);
+            result.push(item);
+        }
     }
-    return result;
+
+    return result.slice(0, NEWS_ARCHIVE_MAX_ITEMS);
+}
+
+// Kies bij duplicate titels de "betere" versie: afbeelding aanwezig wint van
+// geen afbeelding; bij gelijkspel wint een niet-Google-bron (originele feed)
+// boven Google News (aggregator zonder beeld en met vervuilde titel).
+function isPreferredOver(candidate, current) {
+    const cHasImage = !!candidate.image;
+    const curHasImage = !!current.image;
+    if (cHasImage !== curHasImage) return cHasImage;
+
+    const cIsGoogle = isFromGoogleNews(candidate);
+    const curIsGoogle = isFromGoogleNews(current);
+    if (cIsGoogle !== curIsGoogle) return !cIsGoogle;
+
+    return getItemAge(candidate) > getItemAge(current);
 }
 
 function getItemAge(item) {
@@ -257,6 +331,45 @@ function resolveSource(defaultName, link, description) {
     return defaultName;
 }
 
+// Google News voegt " - <Bron>" achteraan de titel toe. Verwijder dat zodat de
+// titel in de UI clean is en cross-source dedup werkt (LC/Omrop hebben die
+// suffix niet).
+function cleanTitle(title) {
+    const parts = (title || '').split(' - ');
+    if (parts.length > 1) {
+        parts.pop();
+        return parts.join(' - ').trim();
+    }
+    return title || '';
+}
+
+// Fallback: als <source>-tag ontbreekt bij Google News, probeer de bron uit de
+// laatste " - X"-suffix van de titel te halen.
+function extractSourceFromTitle(title) {
+    const parts = (title || '').split(' - ');
+    if (parts.length > 1) return parts[parts.length - 1].trim();
+    return '';
+}
+
+// Normaliseer bronnamen zodat verschillende varianten samenvallen tot één
+// consistente label (bijv. "Sportclub Cambuur" → "Cambuur.nl").
+function normalizeSource(source) {
+    const src = (source || '').trim();
+    if (!src) return '';
+    const lowered = src.toLowerCase();
+    if (lowered.includes('sportclub cambuur') || lowered.includes('cambuur.nl')) return 'Cambuur.nl';
+    if (lowered.includes('leeuwarder')) return 'Leeuwarder Courant';
+    if (lowered.includes('omrop')) return 'Omrop Fryslân';
+    return src;
+}
+
+// Detecteer of een item afkomstig is van de Google News-feed (link naar
+// news.google.com). Gebruikt voor dedup-voorkeur: originele bron > Google.
+function isFromGoogleNews(item) {
+    return (item?.link || '').includes('news.google.com')
+        || (item?.source || '').toLowerCase().includes('google news');
+}
+
 // === Minimalistische RSS 2.0 parser (geen DOMParser in Workers) ===
 function parseRss(xml) {
     const items = [];
@@ -270,6 +383,9 @@ function parseRss(xml) {
             pubDate: extractTag(body, 'pubDate'),
             description: extractTag(body, 'description'),
             image: extractImage(body),
+            // Google News zet de daadwerkelijke bron in een <source> tag; overige
+            // feeds hebben die vaak niet. Leeg = fallback naar feed-naam / regex.
+            sourceLabel: extractTag(body, 'source'),
         });
     }
     return items;

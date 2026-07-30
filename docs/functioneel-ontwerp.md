@@ -37,7 +37,7 @@ De app heeft één hoofdscherm met drie tabbladen: **Nieuws**, **Video's**, **Po
 - Google News RSS levert doorgaans geen item-afbeelding mee (`enclosure`/`media:*`/`<img>` ontbreekt), waardoor Google-items vaak zonder afbeelding worden getoond.
 - Best-effort fallback: voor een beperkt aantal Google-items zonder afbeelding wordt via de proxy de artikel-HTML opgehaald en `og:image`/`twitter:image` uitgelezen; resultaten worden tijdelijk gecachet.
 - Klik op kaart opent originele artikel in nieuw tabblad (`target="_blank" rel="noopener"`).
-- Deduplicatie: op genormaliseerde titel (alleen letters/cijfers, eerste 60 tekens).
+- Deduplicatie: op genormaliseerde titel (alleen letters/cijfers, eerste 60 tekens). Bij duplicates wint een niet-Google-bron mét afbeelding boven een Google News-mirror zonder beeld, zodat de gebruiker altijd de rijkste versie ziet.
 - **Lokaal archief:** artikelen blijven zichtbaar nadat ze uit de RSS-feed zijn verdwenen. Iedere fetch merget verse items met het lokale archief (dedup op link) en bewaart tot `NEWS_ARCHIVE_MAX_ITEMS` items binnen `NEWS_MAX_AGE_DAYS`. Items zonder `pubDate` krijgen een `firstSeen`-timestamp zodat ze correct verouderen. Alleen renderbare velden worden opgeslagen om de localStorage-footprint klein te houden.
 - **Stale-while-revalidate:** bij openen wordt het archief direct gerenderd (geen laad-indicator); op de achtergrond wordt fresh data opgehaald en de lijst stil bijgewerkt. Bij een fetch-fout blijft het archief zichtbaar zonder foutmelding.
 - **Skeleton-placeholders:** alleen bij een lege eerste bezoek-cache worden shimmer-kaarten getoond in plaats van de tekst-loader. De shimmer respecteert `prefers-reduced-motion`.
@@ -104,7 +104,7 @@ De app heeft één hoofdscherm met drie tabbladen: **Nieuws**, **Video's**, **Po
 
 ### 4.4 Infrastructuur
 - **CORS-proxy:** eigen Cloudflare Worker `cambuur-feed-proxy.ewoudwesterhuis.workers.dev` met 100k requests/dag, 10 minuten edge-cache.
-- **Nieuws-archief-Worker:** aparte Cloudflare Worker `cambuur-news-archive.ewoudwesterhuis.workers.dev` met Workers KV binding `CAMBUUR_ARCHIVE`. Draait elke 5 minuten via een cron trigger, haalt alle RSS-bronnen op, filtert op Cambuur-mentions, merget met het bestaande archief (dedup op link, cross-source dedup op titel) en schrijft het resultaat als JSON terug in KV. Retentie 90 dagen, cap op 500 items. Endpoint (GET /) levert `{ updatedAt, count, items }` met CORS + 5 min edge-cache. Zo krijgt elke bezoeker — ook op een nieuw device — direct het volledige, actuele archief zonder client-side per-bron fetches.
+- **Nieuws-archief-Worker:** aparte Cloudflare Worker `cambuur-news-archive.ewoudwesterhuis.workers.dev` met Workers KV binding `CAMBUUR_ARCHIVE`. Draait elke 5 minuten via een cron trigger, haalt alle RSS-bronnen op, filtert op Cambuur-mentions, past dezelfde `ALLOWED_GOOGLE_SOURCES`-whitelist toe als de client (LC, Omrop Fryslân, Voetbalzone, Voetbal International), leest de `<source>`-tag van Google News uit en schoont de " - Bron"-suffix uit de titel. Vervolgens merget hij met het bestaande archief (dedup op link met voorkeur voor schone titels/bronnen, cross-source dedup op titel met voorkeur voor niet-Google + met afbeelding) en schrijft het resultaat als JSON terug in KV. Retentie 90 dagen, cap op 500 items. Endpoint (GET /) levert `{ updatedAt, count, items }` met CORS + 5 min edge-cache. Zo krijgt elke bezoeker — ook op een nieuw device — direct het volledige, actuele archief zonder client-side per-bron fetches.
 - **Hosting:** GitHub Pages (zie `CNAME`).
 
 ### 4.5 Configuratie
@@ -204,6 +204,7 @@ De app heeft één hoofdscherm met drie tabbladen: **Nieuws**, **Video's**, **Po
 
 | Datum | Hoofdstuk(ken) | Wijziging | Door |
 |-------|----------------|-----------|------|
+| 2026-07-30 | 2.2, 4.4, 8 | Nieuws-archief-Worker gelijkgetrokken met client-gedrag: `<source>`-tag uit Google News gebruikt als bronlabel, " - Bron"-suffix uit titels verwijderd, `ALLOWED_GOOGLE_SOURCES`-whitelist toegepast (voorkomt obscure Google-bronnen), en cross-source dedup verkiest niet-Google met afbeelding boven Google News zonder beeld. Bestaande vervuilde items worden bij eerstvolgende cron automatisch opgeschoond. | GitHub Copilot |
 | 2026-07-29 | 4.4, 4.5, 5.3, 8 | Centrale nieuws-archief-Worker (`worker/news-archive-worker.js` + `wrangler.toml`) toegevoegd: KV-gebaseerd archief, 5 min cron, 90 dagen retentie, 500 items cap. Client (`app.js`) probeert eerst dit endpoint en valt bij fout terug op per-bron fetches, zodat een gebruiker die weken wegblijft niets mist. | GitHub Copilot |
 | 2026-07-29 | 2.2, 4.5, 5.3, 8 | Nieuws-archief (dedup op link, max 150 items, 30 dagen) + stale-while-revalidate + skeleton-placeholders toegevoegd; artikelen blijven bewaard nadat ze uit de RSS-feed verdwijnen en de tab laadt direct vanuit cache. | GitHub Copilot |
 | 2026-07-29 | 4.1, 8 | LC RSS-endpoint bijgewerkt: `lc.nl/api/feed/rss` gaf 404 na websitevernieuwing; vervangen door de nieuwe brede feed `www.lc.nl/rss` (dekt sport én regio). | GitHub Copilot |

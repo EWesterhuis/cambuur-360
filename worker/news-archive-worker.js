@@ -16,7 +16,6 @@
 const NEWS_MAX_AGE_DAYS = 90;
 const NEWS_ARCHIVE_MAX_ITEMS = 500;
 const KV_KEY_ARCHIVE = 'news-archive';
-const KV_KEY_META = 'news-archive-meta';
 
 const CAMBUUR_NEWS_ENDPOINT =
     'https://cambuur-feed-proxy.ewoudwesterhuis.workers.dev/?endpoint=cambuur-news';
@@ -85,17 +84,11 @@ export default {
             ctx.waitUntil(refreshArchive(env));
         }
 
-        const [itemsRaw, metaRaw] = await Promise.all([
-            env.CAMBUUR_ARCHIVE.get(KV_KEY_ARCHIVE),
-            env.CAMBUUR_ARCHIVE.get(KV_KEY_META),
-        ]);
-
-        const items = itemsRaw ? JSON.parse(itemsRaw) : [];
-        const meta = metaRaw ? JSON.parse(metaRaw) : { updatedAt: null, count: items.length };
+        const { items, updatedAt } = readArchive(await env.CAMBUUR_ARCHIVE.get(KV_KEY_ARCHIVE));
 
         return new Response(
             JSON.stringify({
-                updatedAt: meta.updatedAt,
+                updatedAt,
                 count: items.length,
                 items,
             }),
@@ -118,18 +111,24 @@ export default {
 async function refreshArchive(env) {
     const fresh = await collectFreshItems();
 
-    const existingRaw = await env.CAMBUUR_ARCHIVE.get(KV_KEY_ARCHIVE);
-    const existing = existingRaw ? JSON.parse(existingRaw) : [];
+    const { items: existing } = readArchive(await env.CAMBUUR_ARCHIVE.get(KV_KEY_ARCHIVE));
 
     const merged = mergeArchive(existing, fresh);
 
-    await Promise.all([
-        env.CAMBUUR_ARCHIVE.put(KV_KEY_ARCHIVE, JSON.stringify(merged)),
-        env.CAMBUUR_ARCHIVE.put(
-            KV_KEY_META,
-            JSON.stringify({ updatedAt: Date.now(), count: merged.length }),
-        ),
-    ]);
+    // Free tier staat maar 1.000 KV-writes/dag toe: alleen schrijven bij een wijziging.
+    if (JSON.stringify(merged) === JSON.stringify(existing)) return;
+
+    await env.CAMBUUR_ARCHIVE.put(
+        KV_KEY_ARCHIVE,
+        JSON.stringify({ updatedAt: Date.now(), items: merged }),
+    );
+}
+
+// Ondersteunt ook het oude formaat (kale array zonder updatedAt).
+function readArchive(raw) {
+    const data = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(data)) return { items: data, updatedAt: null };
+    return { items: data?.items || [], updatedAt: data?.updatedAt ?? null };
 }
 
 async function collectFreshItems() {

@@ -88,7 +88,7 @@ De app heeft één hoofdscherm met drie tabbladen: **Nieuws**, **Video's**, **Po
 | Omrop Fryslân — Sport | `omropfryslan.nl/rss/sport.xml` | RSS | Ja |
 | Omrop Fryslân — Nieuws | `omropfryslan.nl/rss/nieuws.xml` | RSS | Ja |
 | Leeuwarder Courant | `www.lc.nl/rss` | RSS | Ja |
-| Cambuur.nl | Custom Worker endpoint `?endpoint=cambuur-news` | JSON (sitemap-scrape) | Direct |
+| Cambuur.nl | Custom Worker endpoint `?endpoint=cambuur-news` (leest `www.cambuur.nl/nieuws/feed/`) | JSON-array (RSS + `og:image`-verrijking) | Direct |
 
 ### 4.2 Video's
 | Bron | Endpoint | API-kosten |
@@ -103,7 +103,7 @@ De app heeft één hoofdscherm met drie tabbladen: **Nieuws**, **Video's**, **Po
 | Hertenkamp (Leeuwarder Courant) | `omnycontent.com/.../podcast.rss` |
 
 ### 4.4 Infrastructuur
-- **CORS-proxy:** eigen Cloudflare Worker `cambuur-feed-proxy.ewoudwesterhuis.workers.dev` met 100k requests/dag, 10 minuten edge-cache.
+- **CORS-proxy:** eigen Cloudflare Worker `cambuur-feed-proxy.ewoudwesterhuis.workers.dev` (bron: `worker/feed-proxy-worker.js`, deploy via dashboard) met 100k requests/dag, 10 minuten edge-cache. Het endpoint `?endpoint=cambuur-news` leest de WordPress-RSS `cambuur.nl/nieuws/feed/` (titel, link, pubDate) en haalt per artikel best-effort `og:image`/`og:description` op (24 uur edge-cache per artikel). Mislukt die verrijking, dan blijft het artikel zonder afbeelding in de lijst. Retentie 30 dagen, max. 30 artikelen; respons is een kale JSON-array. Let op: cambuur.nl draait achter BunnyCDN-botbescherming die verzoeken soms met een 403 weigert.
 - **Nieuws-archief-Worker:** aparte Cloudflare Worker `cambuur-news-archive.ewoudwesterhuis.workers.dev` met Workers KV binding `CAMBUUR_ARCHIVE`. Draait elke 5 minuten via een cron trigger, haalt alle RSS-bronnen op, filtert op Cambuur-mentions, past dezelfde `ALLOWED_GOOGLE_SOURCES`-whitelist toe als de client (LC, Omrop Fryslân, Voetbalzone, Voetbal International), leest de `<source>`-tag van Google News uit en schoont de " - Bron"-suffix uit de titel. Vervolgens merget hij met het bestaande archief (dedup op link met voorkeur voor schone titels/bronnen, cross-source dedup op titel met voorkeur voor niet-Google + met afbeelding) en schrijft het resultaat als één JSON-object `{ updatedAt, items }` terug in KV — **alleen als het archief daadwerkelijk is gewijzigd**, om binnen de free-tier limiet van 1.000 KV-writes/dag te blijven (`updatedAt` = tijdstip van laatste wijziging). Retentie 90 dagen, cap op 500 items. Endpoint (GET /) levert `{ updatedAt, count, items }` met CORS + 5 min edge-cache. Zo krijgt elke bezoeker — ook op een nieuw device — direct het volledige, actuele archief zonder client-side per-bron fetches.
 - **Hosting:** GitHub Pages (zie `CNAME`).
 
@@ -204,6 +204,7 @@ De app heeft één hoofdscherm met drie tabbladen: **Nieuws**, **Video's**, **Po
 
 | Datum | Hoofdstuk(ken) | Wijziging | Door |
 |-------|----------------|-----------|------|
+| 2026-11-12 | 4.1, 4.4, 8 | Cambuur.nl-nieuws aangepast aan de nieuwe WordPress-site: de feed-proxy-Worker (nu in repo als `worker/feed-proxy-worker.js`) leest `/nieuws/feed/` in plaats van de sitemap te scrapen, met best-effort `og:image`-verrijking. De archief-Worker leest de respons nu als kale array (verwachtte `{ items }`, waardoor Cambuur.nl-items nooit in het archief kwamen). | GitHub Copilot |
 | 2026-10-01 | 4.4, 8 | Nieuws-archief-Worker: KV-writes gereduceerd (waarschuwing "50% van daily cap"). Archief + meta samengevoegd in één key en er wordt alleen geschreven als het archief wijzigt (was 2 writes × 288 cron-runs = 576/dag van 1.000 toegestaan). Oud array-formaat blijft leesbaar. | GitHub Copilot |
 | 2026-07-30 | 5.3, 8 | Client-side `mergeNewsArchive` bug gefixed: fresh title/source van de Worker wint nu van bestaande localStorage-entries, zodat oude vervuilde items (bijv. "Titel - LC" / source "Google News") automatisch opgeschoond worden zodra de Worker schone data levert. Gedrag nu consistent met de Worker-side merge. | GitHub Copilot |
 | 2026-07-30 | 2.2, 4.4, 8 | Nieuws-archief-Worker gelijkgetrokken met client-gedrag: `<source>`-tag uit Google News gebruikt als bronlabel, " - Bron"-suffix uit titels verwijderd, `ALLOWED_GOOGLE_SOURCES`-whitelist toegepast (voorkomt obscure Google-bronnen), en cross-source dedup verkiest niet-Google met afbeelding boven Google News zonder beeld. Bestaande vervuilde items worden bij eerstvolgende cron automatisch opgeschoond. | GitHub Copilot |

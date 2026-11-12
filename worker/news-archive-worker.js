@@ -176,7 +176,7 @@ async function fetchCambuurNL() {
         const raw = await fetchWithTimeout(CAMBUUR_NEWS_ENDPOINT);
         if (!raw) return [];
         const data = JSON.parse(raw);
-        const items = Array.isArray(data?.items) ? data.items : [];
+        const items = Array.isArray(data) ? data : [];
         return items.map(item => ({
             title: item.title || '',
             link: item.link || '',
